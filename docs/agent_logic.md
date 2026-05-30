@@ -124,11 +124,12 @@ Each phase call is wrapped so that any exception is converted into a **degraded 
 rather than a crash:
 
 - If **OBSERVE** throws (model unreachable), that *is* a signal — it becomes a synthetic
-  observation with `health="unreachable"`, which the detector treats as a threshold breach.
+  observation with health status `UNKNOWN` (unreachable maps to HealthStatus `UNKNOWN`), which
+  the detector treats as a threshold breach.
 - If **DETECT / DECIDE** throws, the tick is aborted *defensively*: the agent emits a `no_op`
   for this tick and logs `TICK_ERROR`. Safe-by-default means an internal bug never triggers a
   destructive action.
-- If **ACT / VERIFY** throws, the action is marked `outcome="error"` in the audit log and the
+- If **ACT / VERIFY** throws, the action is marked `outcome="failed"` in the audit log and the
   agent transitions toward `ESCALATED` if retries are exhausted.
 
 ### 2.5 Detailed pseudocode
@@ -143,7 +144,7 @@ def main():
     runtime  = AgentRuntime(cfg)             # rolling windows, counters, cooldowns, state
     install_signal_handlers(runtime)         # SIGINT/SIGTERM -> runtime.stop_requested
 
-    log_audit(django, action="AGENT_STARTED", severity="INFO", outcome="ok")
+    log_audit(django, action="AGENT_STARTED", severity="INFO", outcome="success")
     runtime.state = State.HEALTHY
 
     while not runtime.stop_requested:
@@ -154,7 +155,7 @@ def main():
             # GLOBAL SAFETY NET — a bad tick must never kill the loop
             log.exception("TICK_ERROR")
             log_audit(django, action="TICK_ERROR", severity="LOW",
-                      outcome="error", reason=str(exc))
+                      outcome="failed", reason=str(exc))
             # NOTE: no corrective action taken on internal error (safe-by-default)
 
         elapsed = now() - tick_start
@@ -163,7 +164,7 @@ def main():
         else:
             sleep(cfg.LOOP_INTERVAL_SECONDS - elapsed)
 
-    log_audit(django, action="AGENT_STOPPED", severity="INFO", outcome="ok")
+    log_audit(django, action="AGENT_STOPPED", severity="INFO", outcome="success")
 
 
 def run_one_tick(cfg, runtime, django, jenkins):
@@ -172,7 +173,7 @@ def run_one_tick(cfg, runtime, django, jenkins):
     runtime.push_observation(observation)                # update rolling windows
 
     # ---- PHASE 2: DETECT --------------------------------------------------
-    detection = detect(cfg, runtime, observation)        # detection/* -> DetectionResult
+    detection = detect(cfg, runtime, observation)        # detection/* -> list[DetectionResult] folded into DetectionSummary
 
     # ---- PHASE 3: DECIDE --------------------------------------------------
     decision = decide(cfg, runtime, detection)           # decision_engine/* -> Decision
@@ -212,7 +213,7 @@ that the debounce/hysteresis logic in [§5.2](#52-temporary-noise-vs-persistent-
 
 | Probe (`monitoring/`) | Calls | Collects each tick |
 |---|---|---|
-| `model_probe.py` | `GET /health`, `GET /metrics` on the active model (port 8001) | `health` (up/degraded/unreachable), `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `requests_per_sec`, model `version` |
+| `model_probe.py` | `GET /health`, `GET /metrics` on the active model (port 8001) | `health` (HealthStatus: HEALTHY/DEGRADED/CRITICAL/UNKNOWN; unreachable maps to UNKNOWN), `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `requests_per_sec`, model `version` |
 | `prediction_probe.py` | `POST /predict` with a probe payload | `prediction_confidence` (mean score of the batch), `predict_latency_ms`, `predict_ok` (did the call succeed), the raw prediction vector |
 | `data_loader.py` | Loads recent inputs (CSV / simulated stream) | `recent_inputs` (the feature batch fed to drift detection downstream), `n_rows`, `feature_summary` (per-feature mean/std) |
 
@@ -230,7 +231,7 @@ which is treated as a degraded observation rather than silently mis-parsed.
 # schemas.py  (pydantic — illustrative)
 
 class ModelHealth(BaseModel):
-    health: Literal["up", "degraded", "unreachable"]
+    health: Literal["HEALTHY", "DEGRADED", "CRITICAL", "UNKNOWN"]   # HealthStatus; "unreachable" maps to UNKNOWN
     version: str
     latency_p50_ms: float
     latency_p95_ms: float
@@ -258,8 +259,9 @@ class Observation(BaseModel):
 ```
 
 **Degraded-observe rule:** if any probe raises (timeout, connection refused, validation error),
-the loop synthesizes an `Observation` with `model.health="unreachable"` and records the cause in
-`probe_errors`. Unreachability is a *first-class signal*, not an exception to swallow.
+the loop synthesizes an `Observation` with `model.health="UNKNOWN"` (unreachable maps to
+HealthStatus `UNKNOWN`) and records the cause in `probe_errors`. Unreachability is a *first-class
+signal*, not an exception to swallow.
 
 `runtime.push_observation(obs)` appends the observation to the **rolling windows** keyed by
 metric (latency window, error-rate window, confidence window, health window), each of length
@@ -269,9 +271,10 @@ metric (latency window, error-rate window, confidence window, health window), ea
 
 ## 4. Phase 2 — DETECT
 
-**Goal:** reduce the current observation + rolling history into one normalized
-**`DetectionResult`** of named signals. **The algorithms are out of scope here** (see
-`detection_methods.md`); the decision engine only consumes the *outputs* below.
+**Goal:** reduce the current observation + rolling history into a `list[DetectionResult]` (one
+per detector evaluation), folded into one normalized per-tick **`DetectionSummary`** of named
+signals. **The algorithms are out of scope here** (see `detection_methods.md`); the decision
+engine only consumes the *outputs* below.
 
 ### 4.1 Signals consumed by the decision engine
 
@@ -283,11 +286,15 @@ metric (latency window, error-rate window, confidence window, health window), ea
 | `drift_score` | `drift_detector.py` | `float` (0–1) | Data/concept drift magnitude vs. reference distribution |
 | `drift_flag` | `drift_detector.py` | `bool` | `drift_score >= DRIFT_SCORE_THRESHOLD` |
 
-### 4.2 The normalized `DetectionResult`
+### 4.2 The normalized `DetectionSummary`
+
+Each detector emits a `DetectionResult` (its own per-detector output, see `detection_methods.md`);
+the tick's `list[DetectionResult]` is folded into one per-tick aggregate, `DetectionSummary`:
 
 ```python
-class DetectionResult(BaseModel):
+class DetectionSummary(BaseModel):
     ts: datetime
+    results: list[DetectionResult] = []      # the per-detector outputs folded into this summary
     threshold_breaches: set[str] = set()     # named breaches this tick
     anomaly_flag: bool = False
     anomaly_score: float = 0.0
@@ -308,14 +315,16 @@ class DetectionResult(BaseModel):
         return kinds[0] if len(kinds) == 1 else "MIXED"
 ```
 
-`DetectionResult` is **per-tick** and stateless about history — persistence is handled in the
+> Schemas and enum values are defined canonically in `conventions.md`.
+
+`DetectionSummary` is **per-tick** and stateless about history — persistence is handled in the
 DECIDE phase via debounce counters, so detection stays a pure function of (observation, window).
 
 ---
 
 ## 5. Phase 3 — DECIDE (the heart)
 
-The decision engine (`decision_engine/`) converts a `DetectionResult` plus the agent's
+The decision engine (`decision_engine/`) converts a `DetectionSummary` plus the agent's
 **memory** (debounce counters, cooldowns, current state) into a single **`Decision`**. It has
 three stages: **classify severity → resolve persistence → apply policy table**, then gate on
 **cooldown/rate-limit**.
@@ -341,7 +350,7 @@ below. Where multiple rules match, **the highest severity wins** (`max`).
 | Two or more concurrent breaches (`MIXED`) | **HIGH** |
 
 ```python
-def classify_severity(det: DetectionResult, obs: Observation, cfg) -> Severity:
+def classify_severity(det: DetectionSummary, obs: Observation, cfg) -> Severity:
     sev = Severity.NONE
     if "MODEL_UNREACHABLE" in det.threshold_breaches:           sev = max(sev, Severity.HIGH)
     if obs.model.error_rate >= cfg.ERROR_RATE_HIGH_LIMIT:       sev = max(sev, Severity.HIGH)
@@ -467,8 +476,8 @@ asks for help rather than acting when it isn't sure.
 class Decision(BaseModel):
     ts: datetime
     action: Literal["no_op","alert","switch_to_backup",
-                    "rollback","retrain","disable_predictions"]
-    severity: Literal["LOW","MEDIUM","HIGH","NONE"]
+                    "rollback","retrain","disable_predictions","enable_predictions"]
+    severity: Literal["NONE","LOW","MEDIUM","HIGH"]
     signal_type: Literal["NONE","THRESHOLD","ANOMALY","DRIFT","MIXED"]
     persistence: Literal["TRANSIENT","PERSISTENT","CLEARED"]
     reason: str                 # human-readable, e.g. "error_rate 0.18>0.10 for 4 ticks"
@@ -477,6 +486,8 @@ class Decision(BaseModel):
     incident_id: str
     dry_run: bool = False
 ```
+
+> Schemas and enum values are defined canonically in `conventions.md`.
 
 `reason` is mandatory and verbose — it is what a human reads in the audit log to understand *why*
 the agent acted. Every field is logged to `actions_app`.
@@ -488,9 +499,9 @@ the agent acted. Every field is logged to `actions_app`.
 **Goal:** execute the chosen action **idempotently**, **reversibly**, and **fully audited**. The
 golden rule:
 
-> **Log to `actions_app` BEFORE acting and AFTER acting.** The "before" record (status
-> `STARTED`) guarantees that even if the process dies mid-action, there is a durable trace of
-> intent. The "after" record (status `ok`/`error`) records the outcome.
+> **Log to `actions_app` BEFORE acting and AFTER acting.** The "before" record (outcome
+> `pending`) guarantees that even if the process dies mid-action, there is a durable trace of
+> intent. The "after" record (outcome `success`/`failed`) records the outcome.
 
 ### 6.1 Action implementations (`actions/`)
 
@@ -534,14 +545,14 @@ def act(cfg, decision, django, jenkins):
         log_audit(django, **decision.dict(), status="DRY_RUN", outcome="skipped")
         return ActResult(ok=True, note="dry_run")
     # BEFORE
-    audit_id = django.create_action(**decision.dict(), status="STARTED")
+    audit_id = django.create_action(**decision.dict(), outcome="pending")
     try:
         result = ACTION_DISPATCH[decision.action](decision, django, jenkins)
-        outcome = "ok" if result.ok else "failed"
+        outcome = "success" if result.ok else "failed"
     except Exception as exc:
-        result, outcome = ActResult(ok=False, error=str(exc)), "error"
+        result, outcome = ActResult(ok=False, error=str(exc)), "failed"
     # AFTER
-    django.update_action(audit_id, status="DONE", outcome=outcome, detail=result.dict())
+    django.update_action(audit_id, outcome=outcome, detail=result.dict())
     return result
 ```
 
@@ -570,9 +581,9 @@ def verify(cfg, runtime, decision, django) -> Verdict:
     base = runtime.baseline
     improved = (post.model.error_rate <= base.error_rate * cfg.VERIFY_TOLERANCE
                 and post.model.latency_p95_ms <= base.latency_p95_ms * cfg.VERIFY_TOLERANCE
-                and post.model.health == "up")
+                and post.model.health == "HEALTHY")
     worse    = (post.model.error_rate > runtime.pre_action_error_rate
-                or post.model.health == "unreachable")
+                or post.model.health == "UNKNOWN")
     if improved: return Verdict.SUCCESS
     if worse:    return Verdict.MADE_WORSE
     return Verdict.NO_CHANGE
@@ -589,12 +600,12 @@ reversibility context saved in the audit record:
 ```python
 def handle_verdict(cfg, runtime, decision, verdict, django, jenkins):
     if verdict == Verdict.SUCCESS:
-        runtime.close_incident(decision.incident_id, outcome="recovered")
+        runtime.close_incident(decision.incident_id, outcome="success")
         runtime.state = State.HEALTHY
         return
     if verdict == Verdict.MADE_WORSE:
         log_audit(django, action="AUTO_REVERT", reason="recovery_made_worse",
-                  severity="HIGH", outcome="reverting")
+                  severity="HIGH", outcome="reverted")
         revert_action(decision, django, jenkins)     # undo the switch/rollback
         runtime.unresolved_attempts += 1
     else:  # NO_CHANGE
@@ -713,7 +724,7 @@ for a 30 s tick with simulated/batch data.
 | `ERROR_RATE_HIGH_LIMIT` | `0.15` | ratio | Error rate that is HIGH severity |
 | `CONFIDENCE_LOW_LIMIT` | `0.55` | score | Mean prediction confidence floor (`CONFIDENCE_LOW`) |
 | `ANOMALY_SCORE_MEDIUM` | `3.0` | z/score | Anomaly magnitude that is MEDIUM |
-| `DRIFT_SCORE_THRESHOLD` | `0.3` | 0–1 | `drift_flag` trips at/above this |
+| `DRIFT_SCORE_THRESHOLD` | `0.25` | 0–1 | `drift_flag` trips at/above this |
 | `DRIFT_SCORE_HIGH` | `0.6` | 0–1 | Drift magnitude that is HIGH |
 | `ACTION_COOLDOWN_SECONDS` | `300` | s | Min gap between actions |
 | `MAX_ACTIONS_PER_WINDOW` | `3` | count | Rate-limit budget |
@@ -750,15 +761,15 @@ PERSISTENT) → rollback`. Confidence (3 consecutive breaches, rising trend) ≈
 stands. Not in cooldown, rate budget 3 available.
 
 **ACT (T3):**
-1. `log_audit_before`: `{action: rollback, severity: HIGH, target_model: model_a@v1.3 (prev), status: STARTED, reason: "error_rate 0.17>=0.15 for 3 ticks"}`.
+1. `log_audit_before`: `{action: rollback, severity: HIGH, target_model: model_a@v1.3 (prev), outcome: pending, reason: "error_rate 0.17>=0.15 for 3 ticks"}`.
 2. `runtime.mark_action_started` → cooldown until 06:30; rate-limit count = 1/3.
 3. `jenkins.trigger("rollback_model", {version: "1.3"})`; wait for build success; update registry.
-4. `log_audit_after`: `status=DONE, outcome=ok, build=#412`.
+4. `log_audit_after`: `outcome=success, build=#412`.
 
 **VERIFY (T3, after `VERIFY_SETTLE_SECONDS=20 s`, ~01:50):**
-- Re-probe: `error_rate=0.012`, `p95=185 ms`, `health=up`.
-- `improved`: `0.012 ≤ 0.01×1.2 (=0.012)` ✓, `185 ≤ 180×1.2 (=216)` ✓, health up ✓ → **`Verdict.SUCCESS`**.
-- `handle_verdict`: close incident `outcome=recovered`; `runtime.state = HEALTHY`.
+- Re-probe: `error_rate=0.012`, `p95=185 ms`, `health=HEALTHY`.
+- `improved`: `0.012 ≤ 0.01×1.2 (=0.012)` ✓, `185 ≤ 180×1.2 (=216)` ✓, health HEALTHY ✓ → **`Verdict.SUCCESS`**.
+- `handle_verdict`: close incident `outcome=success`; `runtime.state = HEALTHY`.
 
 **Result:** the agent autonomously detected a bad deploy, waited out transient noise (T1–T2),
 rolled back the version on confirmation (T3), verified recovery against baseline, and returned to
@@ -767,7 +778,7 @@ rolled back the version on confirmation (T3), verified recovery against baseline
 ### Counter-example (verification catches a backfire)
 
 Had the rollback *worsened* things (e.g. previous version also broken → `error_rate=0.30`,
-`health=unreachable`), VERIFY returns `MADE_WORSE`. `rollback_guard` logs `AUTO_REVERT`, reverts
+`health=UNKNOWN`), VERIFY returns `MADE_WORSE`. `rollback_guard` logs `AUTO_REVERT`, reverts
 to the prior active model, increments `unresolved_attempts=1`, and sets state `DEGRADED`. On the
 next eligible cycle (after cooldown) the agent tries the next policy action (`switch_to_backup` →
 model_b). If three attempts still fail, it executes `disable_predictions`, fires a HIGH `alert`,
@@ -780,7 +791,7 @@ and parks in `ESCALATED` for humans.
 | Phase | Package | Modules | Produces |
 |---|---|---|---|
 | OBSERVE | `monitoring/` | `model_probe.py`, `prediction_probe.py`, `data_loader.py` | `Observation` |
-| DETECT | `detection/` | `threshold_detector.py`, `anomaly_detector.py`, `drift_detector.py` | `DetectionResult` |
+| DETECT | `detection/` | `threshold_detector.py`, `anomaly_detector.py`, `drift_detector.py` | `list[DetectionResult]` → `DetectionSummary` |
 | DECIDE | `decision_engine/` | `severity_classifier.py`, `policy_rules.py`, `decision.py` | `Decision` |
 | ACT | `actions/` | `switch_model.py`, `alert.py`, `no_op.py` | `ActResult` + audit records |
 | VERIFY | `verification/` | `health_check.py`, `rollback_guard.py` | `Verdict` + revert/escalate |

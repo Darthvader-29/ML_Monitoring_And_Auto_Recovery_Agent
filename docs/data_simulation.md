@@ -147,7 +147,7 @@ cached so PSI and KS (see `detection_methods.md`) can be computed cheaply agains
 ### 3.3 Training model_a and model_b
 
 Both models train on `reference.csv`, but **model_b is deliberately weaker/older** so it is a
-meaningful fallback target for the `switch_model` action.
+meaningful fallback target for the `switch_to_backup` action.
 
 ```python
 # data_sim/train_models.py  (pseudocode)
@@ -613,7 +613,7 @@ Algorithms, thresholds, bin counts, and statistical tests live in `detection_met
 ### 11.2 → `failure_scenarios.md`
 **Each `id` in the drift schedule (§7) maps 1:1 to a failure scenario.** `SC-01` … `SC-06` are the
 deterministic, seed-locked scripts those scenarios assert against (expected detector to fire,
-expected severity, expected agent action such as `switch_model` to model_b, and expected
+expected severity, expected agent action such as `switch_to_backup` to model_b, and expected
 verification outcome). `failure_scenarios.md` references these IDs; it does not redefine the
 injection mechanics — those are owned here in §5.
 

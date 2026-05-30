@@ -11,6 +11,8 @@
 > (the `MetricSnapshot` field set), and `docs/agent_logic.md` (the Decision/Action vocabulary).
 > Field names here are chosen to match those documents exactly so that a row in the DB and a
 > JSON body on the wire are trivially mappable.
+>
+> **Enum values and field names conform to `conventions.md` (authoritative).**
 
 ---
 
@@ -576,7 +578,7 @@ raw probe payload as JSON for full fidelity.
 | `id` | `BigAutoField` | `bigint` | **PK** | Surrogate key. |
 | `model_version` | `ForeignKey(ModelVersion, on_delete=CASCADE, related_name="snapshots")` | `bigint` FK | **FK**, not null, indexed | Which version this observation is of. `CASCADE`: deleting a version purges its history. |
 | `timestamp` | `DateTimeField(db_index=True)` | `timestamptz` | not null, indexed | Observation time (UTC). Matches `ts` on the wire. |
-| `window_seconds` | `PositiveIntegerField(default=60)` | `integer` | not null | Aggregation window length in seconds. |
+| `window_seconds` | `PositiveIntegerField(default=300)` | `integer` | not null | Aggregation window length in seconds. |
 | `request_count` | `PositiveIntegerField(default=0)` | `integer` | not null | Requests seen in the window. |
 | `error_count` | `PositiveIntegerField(default=0)` | `integer` | not null | Errored requests in the window. |
 | `error_rate` | `FloatField(default=0.0)` | `double precision` | not null, `[0,1]` | `error_count / request_count`. |
@@ -590,7 +592,7 @@ raw probe payload as JSON for full fidelity.
 | `out_of_range_rate` | `FloatField(default=0.0)` | `double precision` | not null, `[0,1]` | Fraction of feature values outside expected bounds. |
 | `overall_drift_score` | `FloatField(default=0.0)` | `double precision` | not null | Aggregate drift score across features (e.g. mean PSI). |
 | `drifted_feature_count` | `PositiveIntegerField(default=0)` | `integer` | not null | Number of features flagged as drifted. |
-| `health_status` | `CharField(max_length=16, choices=HEALTH_STATUS, default="HEALTHY", db_index=True)` | `varchar(16)` | not null, indexed | `HEALTHY/DEGRADED/UNHEALTHY/UNKNOWN`. |
+| `health_status` | `CharField(max_length=16, choices=HEALTH_STATUS, default="HEALTHY", db_index=True)` | `varchar(16)` | not null, indexed | `HEALTHY/DEGRADED/CRITICAL/UNKNOWN`. |
 | `raw` | `JSONField(default=dict, blank=True)` | `jsonb` / `text` | not null (default `{}`) | Full raw payload from the model `/metrics` + probe, for replay/debug. |
 
 #### Django model
@@ -607,7 +609,7 @@ class MetricSnapshot(models.Model):
     HEALTH_STATUS = [
         ("HEALTHY", "Healthy"),
         ("DEGRADED", "Degraded"),
-        ("UNHEALTHY", "Unhealthy"),
+        ("CRITICAL", "Critical"),
         ("UNKNOWN", "Unknown"),
     ]
 
@@ -615,7 +617,7 @@ class MetricSnapshot(models.Model):
         ModelVersion, on_delete=models.CASCADE, related_name="snapshots"
     )
     timestamp = models.DateTimeField(db_index=True)
-    window_seconds = models.PositiveIntegerField(default=60)
+    window_seconds = models.PositiveIntegerField(default=300)
 
     # --- health ---
     request_count = models.PositiveIntegerField(default=0)
@@ -666,7 +668,7 @@ class MetricSnapshot(models.Model):
   "id": 90817,
   "model_version": 11,
   "timestamp": "2026-05-30T12:00:00Z",
-  "window_seconds": 60,
+  "window_seconds": 300,
   "request_count": 1240,
   "error_count": 7,
   "error_rate": 0.0056,
@@ -862,7 +864,7 @@ the agent responds, and closes when the system is verified healthy (or escalated
 | `opened_at` | `DateTimeField(auto_now_add=True)` | `timestamptz` | not null, indexed | When the incident opened. |
 | `closed_at` | `DateTimeField(null=True, blank=True)` | `timestamptz` | nullable | When it resolved/escalated. |
 | `status` | `CharField(max_length=16, choices=INCIDENT_STATUS, default="OPEN", db_index=True)` | `varchar(16)` | not null, indexed | `OPEN/RECOVERING/VERIFYING/RESOLVED/ESCALATED`. |
-| `severity` | `CharField(max_length=8, choices=SEVERITY, default="LOW", db_index=True)` | `varchar(8)` | not null, indexed | Worst severity seen: `LOW/MEDIUM/HIGH/CRITICAL`. |
+| `severity` | `CharField(max_length=8, choices=SEVERITY, default="LOW", db_index=True)` | `varchar(8)` | not null, indexed | Worst severity seen: `LOW/MEDIUM/HIGH`. |
 | `category` | `CharField(max_length=24, choices=CATEGORY, default="UNKNOWN")` | `varchar(24)` | not null | Root-cause class: `DATA_DRIFT/CONCEPT_DRIFT/ANOMALY/THRESHOLD/AVAILABILITY/UNKNOWN`. |
 | `root_cause` | `TextField(blank=True)` | `text` | nullable("") | Free-text root-cause notes. |
 
@@ -886,7 +888,7 @@ class Incident(models.Model):
     ]
     SEVERITY = [
         ("LOW", "Low"), ("MEDIUM", "Medium"),
-        ("HIGH", "High"), ("CRITICAL", "Critical"),
+        ("HIGH", "High"),
     ]
     CATEGORY = [
         ("DATA_DRIFT", "Data drift"),
@@ -954,16 +956,16 @@ This is *the* auditable, reversible trail. Each row captures *what* was decided
 | `id` | `BigAutoField` | `bigint` | **PK** | Surrogate key. |
 | `incident` | `ForeignKey(Incident, on_delete=PROTECT, related_name="actions")` | `bigint` FK | **FK**, not null, indexed | Owning incident. `PROTECT` preserves the trail. |
 | `model_version` | `ForeignKey(ModelVersion, on_delete=PROTECT, related_name="actions")` | `bigint` FK | **FK**, not null, indexed | Target version the action acted on. |
-| `action` | `CharField(max_length=16, choices=ACTION, db_index=True)` | `varchar(16)` | not null, indexed | `NO_OP/ALERT/SWITCH/ROLLBACK/RETRAIN/DISABLE`. |
+| `action` | `CharField(max_length=24, choices=ACTION, db_index=True)` | `varchar(24)` | not null, indexed | `no_op/alert/switch_to_backup/rollback/retrain/disable_predictions/enable_predictions`. |
 | `severity` | `CharField(max_length=8, choices=SEVERITY)` | `varchar(8)` | not null | Severity that triggered the action. |
 | `reason` | `TextField()` | `text` | not null | Human-readable justification (findings summary). |
 | `decided_at` | `DateTimeField(auto_now_add=True)` | `timestamptz` | not null, indexed | When the decision was made. |
 | `executed_at` | `DateTimeField(null=True, blank=True)` | `timestamptz` | nullable | When execution completed (null until done). |
-| `outcome` | `CharField(max_length=8, choices=OUTCOME, default="PENDING", db_index=True)` | `varchar(8)` | not null, indexed | `PENDING/SUCCESS/FAILED/REVERTED`. |
+| `outcome` | `CharField(max_length=8, choices=OUTCOME, default="pending", db_index=True)` | `varchar(8)` | not null, indexed | `pending/success/failed/reverted/skipped`. |
 | `jenkins_build_id` | `CharField(max_length=64, blank=True)` | `varchar(64)` | nullable("") | Jenkins build number/URL for delegated actions. |
 | `before_metrics` | `JSONField(default=dict, blank=True)` | `jsonb` / `text` | not null (`{}`) | Snapshot of metrics *before* the action. |
 | `after_metrics` | `JSONField(default=dict, blank=True)` | `jsonb` / `text` | not null (`{}`) | Snapshot of metrics *after* the action. |
-| `is_reversible` | `BooleanField(default=True)` | `boolean` | not null | Can this action be undone? (`NO_OP`/`ALERT` are trivially reversible no-ops.) |
+| `is_reversible` | `BooleanField(default=True)` | `boolean` | not null | Can this action be undone? (`no_op`/`alert` are trivially reversible no-ops.) |
 | `reverted_by` | `ForeignKey('self', on_delete=SET_NULL, null=True, blank=True, related_name='reverts')` | `bigint` FK | **self-FK**, nullable | The later action that undid this one (links a revert to its original). |
 
 #### Django model
@@ -974,19 +976,21 @@ class ActionLog(models.Model):
     """Immutable, append-only audit record of one decision + its execution."""
 
     ACTION = [
-        ("NO_OP", "No-op"),
-        ("ALERT", "Alert only"),
-        ("SWITCH", "Switch active model"),
-        ("ROLLBACK", "Rollback version"),
-        ("RETRAIN", "Retrain"),
-        ("DISABLE", "Disable predictions"),
+        ("no_op", "No-op"),
+        ("alert", "Alert only"),
+        ("switch_to_backup", "Switch to backup"),
+        ("rollback", "Rollback version"),
+        ("retrain", "Retrain"),
+        ("disable_predictions", "Disable predictions"),
+        ("enable_predictions", "Enable predictions"),
     ]
     SEVERITY = Incident.SEVERITY
     OUTCOME = [
-        ("PENDING", "Pending"),
-        ("SUCCESS", "Success"),
-        ("FAILED", "Failed"),
-        ("REVERTED", "Reverted"),
+        ("pending", "Pending"),
+        ("success", "Success"),
+        ("failed", "Failed"),
+        ("reverted", "Reverted"),
+        ("skipped", "Skipped"),
     ]
 
     incident = models.ForeignKey(
@@ -995,13 +999,13 @@ class ActionLog(models.Model):
     model_version = models.ForeignKey(
         ModelVersion, on_delete=models.PROTECT, related_name="actions"
     )
-    action = models.CharField(max_length=16, choices=ACTION, db_index=True)
+    action = models.CharField(max_length=24, choices=ACTION, db_index=True)
     severity = models.CharField(max_length=8, choices=SEVERITY)
     reason = models.TextField()
     decided_at = models.DateTimeField(auto_now_add=True, db_index=True)
     executed_at = models.DateTimeField(null=True, blank=True)
     outcome = models.CharField(
-        max_length=8, choices=OUTCOME, default="PENDING", db_index=True
+        max_length=8, choices=OUTCOME, default="pending", db_index=True
     )
     jenkins_build_id = models.CharField(max_length=64, blank=True, default="")
     before_metrics = models.JSONField(default=dict, blank=True)
@@ -1035,11 +1039,11 @@ class ActionLog(models.Model):
 [
   {
     "id": 7001, "incident": 42, "model_version": 11,
-    "action": "SWITCH", "severity": "HIGH",
+    "action": "switch_to_backup", "severity": "HIGH",
     "reason": "Data drift (PSI 0.31 on 'age') + accuracy 0.882 < 0.90. Promote model_b.",
     "decided_at": "2026-05-30T11:58:30Z",
     "executed_at": "2026-05-30T11:59:30Z",
-    "outcome": "REVERTED",
+    "outcome": "reverted",
     "jenkins_build_id": "switch_active_model#318",
     "before_metrics": {"accuracy": 0.882, "error_rate": 0.031, "p95_latency_ms": 88.0},
     "after_metrics":  {"accuracy": 0.870, "error_rate": 0.040, "p95_latency_ms": 120.0},
@@ -1048,11 +1052,11 @@ class ActionLog(models.Model):
   },
   {
     "id": 7002, "incident": 42, "model_version": 21,
-    "action": "ROLLBACK", "severity": "HIGH",
+    "action": "rollback", "severity": "HIGH",
     "reason": "Verify failed: model_b worse than baseline. Roll back to model_a@1.4.2.",
     "decided_at": "2026-05-30T12:01:00Z",
     "executed_at": "2026-05-30T12:01:40Z",
-    "outcome": "SUCCESS",
+    "outcome": "success",
     "jenkins_build_id": "rollback_model#119",
     "before_metrics": {"accuracy": 0.870, "error_rate": 0.040, "p95_latency_ms": 120.0},
     "after_metrics":  {"accuracy": 0.939, "error_rate": 0.006, "p95_latency_ms": 42.0},
@@ -1144,13 +1148,13 @@ The schema is indexed for the handful of queries the agent loop and dashboard ac
 |---|----------------|-----------|------------------|
 | Q1 | **Latest snapshot for a version** (detectors, dashboard tiles) | `MetricSnapshot.objects.filter(model_version=v).latest("timestamp")` | `idx_snap_version_ts (model_version, -timestamp)` |
 | Q2 | **Time-series for a version over a window** (dashboard charts) | `MetricSnapshot.objects.filter(model_version=v, timestamp__gte=t0).order_by("timestamp")` | `idx_snap_version_ts` |
-| Q3 | **All currently unhealthy snapshots** (overview banner) | `MetricSnapshot.objects.filter(health_status="UNHEALTHY")` | `idx_snap_health (health_status)` |
+| Q3 | **All currently critical snapshots** (overview banner) | `MetricSnapshot.objects.filter(health_status="CRITICAL")` | `idx_snap_health (health_status)` |
 | Q4 | **Drifted features for a snapshot** | `snapshot.feature_drift.filter(drifted=True)` | `idx_drift_snap_flag (snapshot, drifted)` |
 | Q5 | **Drift history of one feature across snapshots** | `FeatureDriftScore.objects.filter(feature_name="age").select_related("snapshot")` | `idx_drift_feature (feature_name)` |
 | Q6 | **Current active model** (`GET /api/active-model`) | `ActiveModelPointer.objects.select_related("model_version__model").get(pk=1)` | PK lookup + FK indexes |
 | Q7 | **Action history for an incident** (audit drill-down) | `incident.actions.order_by("decided_at")` | `idx_act_incident_ts (incident, decided_at)` |
 | Q8 | **Open incidents, newest first** (ops queue) | `Incident.objects.filter(status="OPEN").order_by("-opened_at")` | `idx_inc_status_ts (status, -opened_at)` |
-| Q9 | **Recent destructive actions and outcomes** (audit report) | `ActionLog.objects.filter(action__in=["SWITCH","ROLLBACK","DISABLE"]).filter(outcome="SUCCESS")` | `idx_act_action_outcome (action, outcome)` |
+| Q9 | **Recent destructive actions and outcomes** (audit report) | `ActionLog.objects.filter(action__in=["switch_to_backup","rollback","disable_predictions"]).filter(outcome="success")` | `idx_act_action_outcome (action, outcome)` |
 | Q10 | **Current baseline for a version** (VERIFY) | `Baseline.objects.get(model_version=v, is_current=True)` | `uq_one_current_baseline_per_version` + `idx_baseline_ver_ts` |
 | Q11 | **Verifications that decided REVERT** | `VerificationResult.objects.filter(decision="REVERT")` | `idx_verify_decision (decision)` |
 | Q12 | **An action and the action that reverted it** | `action.reverts.all()` / `action.reverted_by` | self-FK (`reverted_by_id`) |
@@ -1296,7 +1300,7 @@ Every lifecycle is a constrained enum, so illegal states are not representable a
 - `ModelVersion.status`: `CANDIDATE → STABLE → ACTIVE → DEPRECATED`, plus the terminal
   `ROLLED_BACK` for a version a recovery undid.
 - `Incident.status`: `OPEN → RECOVERING → VERIFYING → {RESOLVED | ESCALATED}`.
-- `ActionLog.outcome`: `PENDING → {SUCCESS | FAILED | REVERTED}`.
+- `ActionLog.outcome`: `pending → {success | failed | reverted | skipped}`.
 - `VerificationResult.decision`: `KEEP | REVERT | ESCALATE`.
 
 Application code (and DRF serializers) validate against `choices`; the DB column stores only
@@ -1313,8 +1317,8 @@ single joined query — without trusting any external system.
 
 - `ActionLog.is_reversible` flags whether an action *can* be undone.
 - `ActionLog.reverted_by` is a **self-referential FK**: when a corrective action (e.g. a
-  `ROLLBACK`) undoes an earlier action (e.g. a `SWITCH`), the earlier row's `reverted_by`
-  points at the corrective row and the earlier row's `outcome` becomes `REVERTED`. The
+  `rollback`) undoes an earlier action (e.g. a `switch_to_backup`), the earlier row's `reverted_by`
+  points at the corrective row and the earlier row's `outcome` becomes `reverted`. The
   reverse accessor `action.reverts` lists everything an action undid.
 - The registry mirrors this: a reverted version's `status` becomes `ROLLED_BACK`, and
   `ActiveModelPointer.switch_to` re-points the singleton back to the prior good version —
@@ -1358,7 +1362,7 @@ serializers and the agent's `schemas.py` aligned with this table.
 |-------|---------|
 | `HEALTHY` | Within all thresholds. |
 | `DEGRADED` | Soft breach (e.g. latency/error elevated, drift rising). |
-| `UNHEALTHY` | Hard breach / failing probes. |
+| `CRITICAL` | Hard breach / failing probes. |
 | `UNKNOWN` | Could not be determined (probe failed). |
 
 ### `Incident.status`
@@ -1375,10 +1379,9 @@ serializers and the agent's `schemas.py` aligned with this table.
 
 | Value | Meaning |
 |-------|---------|
-| `LOW` | Informational; typically `NO_OP`/`ALERT`. |
+| `LOW` | Informational; typically `no_op`/`alert`. |
 | `MEDIUM` | Watch / alert; may pre-warm backup. |
 | `HIGH` | Destructive recovery warranted (switch/rollback). |
-| `CRITICAL` | Severe; immediate recovery + escalation. |
 
 ### `Incident.category`
 
@@ -1395,21 +1398,23 @@ serializers and the agent's `schemas.py` aligned with this table.
 
 | Value | Reversible? | Owner (per architecture.md) |
 |-------|-------------|------------------------------|
-| `NO_OP` | n/a (no change) | `actions/no_op.py` |
-| `ALERT` | n/a (no change) | `actions/alert.py` |
-| `SWITCH` | Yes (switch back) | `actions/switch_model.py` → Jenkins `switch_active_model.groovy` |
-| `ROLLBACK` | Yes (re-deploy) | Jenkins `rollback_model.groovy` |
-| `RETRAIN` | Yes (rollback) | Jenkins `deploy_model.groovy` |
-| `DISABLE` | Yes (re-enable flag) | registry flag + alert |
+| `no_op` | n/a (no change) | `actions/no_op.py` |
+| `alert` | n/a (no change) | `actions/alert.py` |
+| `switch_to_backup` | Yes (switch back) | `actions/switch_model.py` → Jenkins `switch_active_model.groovy` |
+| `rollback` | Yes (re-deploy) | Jenkins `rollback_model.groovy` |
+| `retrain` | Yes (rollback) | Jenkins `deploy_model.groovy` |
+| `disable_predictions` | Yes (`enable_predictions`) | registry flag + alert |
+| `enable_predictions` | Yes (`disable_predictions`) | registry flag + alert |
 
 ### `ActionLog.outcome`
 
 | Value | Meaning |
 |-------|---------|
-| `PENDING` | Decided/executing; not yet confirmed. |
-| `SUCCESS` | Executed and verified good. |
-| `FAILED` | Execution failed (e.g. Jenkins build failed). |
-| `REVERTED` | Was applied, then undone by a later action (see `reverted_by`). |
+| `pending` | Decided/executing; not yet confirmed. |
+| `success` | Executed and verified good. |
+| `failed` | Execution failed (e.g. Jenkins build failed). |
+| `reverted` | Was applied, then undone by a later action (see `reverted_by`). |
+| `skipped` | Was a no-op or suppressed (cooldown / dry-run). |
 
 ### `VerificationResult.decision`
 

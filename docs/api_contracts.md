@@ -321,7 +321,7 @@ Also used by Docker/compose health checks.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | enum `healthy` \| `degraded` \| `unhealthy` | Overall readiness |
+| `health_status` | enum `HEALTHY` \| `DEGRADED` \| `CRITICAL` \| `UNKNOWN` | Overall readiness |
 | `model_loaded` | bool | `true` once `model.pkl` is in memory |
 | `model_name` | string | `"model_a"` / `"model_b"` |
 | `version` | string | Loaded artifact version |
@@ -332,7 +332,7 @@ Also used by Docker/compose health checks.
 
 ```json
 {
-  "status": "healthy",
+  "health_status": "HEALTHY",
   "model_loaded": true,
   "model_name": "model_a",
   "version": "1.4.2",
@@ -346,7 +346,7 @@ model is not loaded (still readiness-failing):
 
 ```json
 {
-  "status": "unhealthy",
+  "health_status": "CRITICAL",
   "model_loaded": false,
   "model_name": "model_a",
   "version": null,
@@ -379,7 +379,7 @@ sliding window. The agent's `Observe` phase pulls this and folds it into a
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `window` | string | `5m` | Rolling window: `1m`, `5m`, `15m`, or `all` |
+| `window_seconds` | int | `300` | Rolling window length in seconds |
 
 **Response `200 OK` schema**
 
@@ -387,7 +387,7 @@ sliding window. The agent's `Observe` phase pulls this and folds it into a
 |-------|------|-------------|
 | `model_name` | string | `"model_a"` / `"model_b"` |
 | `model_version` | string | Loaded artifact version |
-| `window` | string | Echo of the active window, e.g. `"5m"` |
+| `window_seconds` | int | Echo of the active window length in seconds, e.g. `300` |
 | `request_count` | int | Requests served in window |
 | `error_count` | int | Failed requests in window |
 | `error_rate` | float `[0,1]` | `error_count / max(request_count,1)` |
@@ -402,7 +402,7 @@ sliding window. The agent's `Observe` phase pulls this and folds it into a
 {
   "model_name": "model_a",
   "model_version": "1.4.2",
-  "window": "5m",
+  "window_seconds": 300,
   "request_count": 1240,
   "error_count": 9,
   "error_rate": 0.0073,
@@ -417,7 +417,7 @@ sliding window. The agent's `Observe` phase pulls this and folds it into a
 
 | Status | `error.code` | When |
 |--------|--------------|------|
-| `400` | `invalid_window` | `window` not in allowed set |
+| `400` | `invalid_window` | `window_seconds` not a valid positive integer |
 | `503` | `model_not_loaded` | Metrics unavailable because model never loaded |
 
 ---
@@ -445,10 +445,17 @@ exposes these fields (this is the **wire shape** that must match the pydantic
 | `error_rate` | float | no | From model `/metrics` |
 | `avg_latency_ms` | float | no | From model `/metrics` |
 | `p95_latency_ms` | float | no | From model `/metrics` |
-| `avg_confidence` | float | no | From model `/metrics` |
-| `accuracy` | float \| null | no | Optional evaluated accuracy/F1 |
-| `status` | enum `healthy`\|`degraded`\|`unhealthy` | no | Health derived from `/health` |
-| `window` | string | no | Window the metrics cover |
+| `inference_failure_rate` | float | no | Fraction of failed inferences |
+| `avg_confidence` | float \| null | no | From model `/metrics` |
+| `accuracy` | float \| null | no | Optional evaluated accuracy |
+| `f1` | float \| null | no | Optional evaluated F1 |
+| `rmse` | float \| null | no | Optional evaluated RMSE |
+| `missing_rate` | float | no | Fraction of feature values missing |
+| `out_of_range_rate` | float | no | Fraction of feature values out of range |
+| `overall_drift_score` | float | no | Aggregate drift score |
+| `drifted_feature_count` | int | no | Number of drifted features |
+| `health_status` | enum `HEALTHY`\|`DEGRADED`\|`CRITICAL`\|`UNKNOWN` | no | Health derived from `/health` |
+| `window_seconds` | int | no | Window length in seconds the metrics cover (default `300`) |
 | `source` | enum `agent`\|`model`\|`manual` | no | Who created it (default `agent`) |
 | `timestamp` | string (ISO-8601) | no | Observation time (client-supplied) |
 | `created_at` | string (ISO-8601) | yes | Server insert time |
@@ -481,10 +488,17 @@ exposes these fields (this is the **wire shape** that must match the pydantic
   "error_rate": 0.0073,
   "avg_latency_ms": 8.6,
   "p95_latency_ms": 21.3,
+  "inference_failure_rate": 0.0,
   "avg_confidence": 0.88,
   "accuracy": 0.91,
-  "status": "healthy",
-  "window": "5m",
+  "f1": 0.90,
+  "rmse": null,
+  "missing_rate": 0.004,
+  "out_of_range_rate": 0.002,
+  "overall_drift_score": 0.12,
+  "drifted_feature_count": 1,
+  "health_status": "HEALTHY",
+  "window_seconds": 300,
   "source": "agent",
   "timestamp": "2026-05-30T14:21:07.512Z"
 }
@@ -502,10 +516,17 @@ exposes these fields (this is the **wire shape** that must match the pydantic
   "error_rate": 0.0073,
   "avg_latency_ms": 8.6,
   "p95_latency_ms": 21.3,
+  "inference_failure_rate": 0.0,
   "avg_confidence": 0.88,
   "accuracy": 0.91,
-  "status": "healthy",
-  "window": "5m",
+  "f1": 0.90,
+  "rmse": null,
+  "missing_rate": 0.004,
+  "out_of_range_rate": 0.002,
+  "overall_drift_score": 0.12,
+  "drifted_feature_count": 1,
+  "health_status": "HEALTHY",
+  "window_seconds": 300,
   "source": "agent",
   "timestamp": "2026-05-30T14:21:07.512Z",
   "created_at": "2026-05-30T14:21:08.004Z"
@@ -547,7 +568,7 @@ exposes these fields (this is the **wire shape** that must match the pydantic
 | Param | Type | Description |
 |-------|------|-------------|
 | `model` | string | Filter by `model_name` (e.g. `model_a`) |
-| `status` | string | Filter by health status |
+| `health_status` | string | Filter by health status |
 | `since` | ISO-8601 | Lower bound on `timestamp` |
 | `until` | ISO-8601 | Upper bound on `timestamp` |
 | `limit` | int | Page size (max 500) |
@@ -580,8 +601,8 @@ Authorization: Token <DJANGO_API_TOKEN>
       "p95_latency_ms": 21.3,
       "avg_confidence": 0.88,
       "accuracy": 0.91,
-      "status": "healthy",
-      "window": "5m",
+      "health_status": "HEALTHY",
+      "window_seconds": 300,
       "source": "agent",
       "timestamp": "2026-05-30T14:21:07.512Z",
       "created_at": "2026-05-30T14:21:08.004Z"
@@ -610,15 +631,15 @@ model — used by the dashboard "current status" tiles and the agent's quick che
   "model_a": {
     "id": 5821, "model_name": "model_a", "model_version": "1.4.2",
     "error_rate": 0.0073, "avg_latency_ms": 8.6, "p95_latency_ms": 21.3,
-    "avg_confidence": 0.88, "accuracy": 0.91, "status": "healthy",
-    "window": "5m", "source": "agent",
+    "avg_confidence": 0.88, "accuracy": 0.91, "health_status": "HEALTHY",
+    "window_seconds": 300, "source": "agent",
     "timestamp": "2026-05-30T14:21:07.512Z", "created_at": "2026-05-30T14:21:08.004Z"
   },
   "model_b": {
     "id": 5810, "model_name": "model_b", "model_version": "1.3.0",
     "error_rate": 0.0, "avg_latency_ms": 9.9, "p95_latency_ms": 25.0,
-    "avg_confidence": 0.90, "accuracy": 0.89, "status": "healthy",
-    "window": "5m", "source": "agent",
+    "avg_confidence": 0.90, "accuracy": 0.89, "health_status": "HEALTHY",
+    "window_seconds": 300, "source": "agent",
     "timestamp": "2026-05-30T14:21:05.000Z", "created_at": "2026-05-30T14:21:05.300Z"
   }
 }
@@ -793,15 +814,15 @@ Serializer `ActionLogSerializer` fields:
 | Field | Type | Read-only | Description |
 |-------|------|-----------|-------------|
 | `id` | int | yes | PK |
-| `action` | enum | no | `no_op`\|`alert`\|`rollback`\|`switch_backup`\|`retrain`\|`disable_predictions` |
-| `severity` | enum `LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL` | no | From `severity_classifier` |
+| `action` | enum | no | `no_op`\|`alert`\|`switch_to_backup`\|`rollback`\|`retrain`\|`disable_predictions`\|`enable_predictions` |
+| `severity` | enum `NONE`\|`LOW`\|`MEDIUM`\|`HIGH` | no | From `severity_classifier` |
 | `target_model` | string | no | Model the action affects |
 | `reason` | string | no | Human-readable justification (the detection that fired) |
 | `triggered_by` | enum `agent`\|`manual` | no | Default `agent` |
 | `detection_signal` | object \| null | no | Raw signal payload (the `DetectionResult`) |
 | `jenkins_job` | string \| null | no | Job triggered (if any), e.g. `switch_active_model` |
 | `jenkins_build_number` | int \| null | no | Build number returned by Jenkins |
-| `outcome` | enum `pending`\|`success`\|`failed`\|`skipped` | no | Default `pending`; updated after Verify |
+| `outcome` | enum `pending`\|`success`\|`failed`\|`reverted`\|`skipped` | no | Default `pending`; updated after Verify |
 | `verification` | object \| null | no | The serialized `VerificationResult` |
 | `timestamp` | string (ISO-8601) | no | When the decision was made |
 | `created_at` | string (ISO-8601) | yes | Server insert time |
@@ -824,17 +845,18 @@ optional `Idempotency-Key`.
 
 ```json
 {
-  "action": "switch_backup",
+  "action": "switch_to_backup",
   "severity": "HIGH",
   "target_model": "model_a",
   "reason": "error_rate 0.34 over 5m exceeded HIGH threshold 0.20",
   "triggered_by": "agent",
   "detection_signal": {
-    "detector": "threshold_detector",
-    "metric": "error_rate",
-    "observed": 0.34,
+    "detector": "threshold",
+    "signal_type": "error_rate",
+    "score": 0.34,
     "threshold": 0.20,
-    "window": "5m"
+    "breached": true,
+    "severity_hint": "HIGH"
   },
   "jenkins_job": "switch_active_model",
   "jenkins_build_number": 142,
@@ -848,14 +870,14 @@ optional `Idempotency-Key`.
 ```json
 {
   "id": 908,
-  "action": "switch_backup",
+  "action": "switch_to_backup",
   "severity": "HIGH",
   "target_model": "model_a",
   "reason": "error_rate 0.34 over 5m exceeded HIGH threshold 0.20",
   "triggered_by": "agent",
   "detection_signal": {
-    "detector": "threshold_detector", "metric": "error_rate",
-    "observed": 0.34, "threshold": 0.20, "window": "5m"
+    "detector": "threshold", "signal_type": "error_rate",
+    "score": 0.34, "threshold": 0.20, "breached": true, "severity_hint": "HIGH"
   },
   "jenkins_job": "switch_active_model",
   "jenkins_build_number": 142,
@@ -885,7 +907,7 @@ optional `Idempotency-Key`.
 |-------|------|-------------|
 | `action` | string | Filter by action type |
 | `severity` | string | Filter by severity |
-| `outcome` | string | `pending` / `success` / `failed` / `skipped` |
+| `outcome` | string | `pending` / `success` / `failed` / `reverted` / `skipped` |
 | `target_model` | string | Filter by affected model |
 | `since` / `until` | ISO-8601 | Time bounds on `timestamp` |
 | `limit` / `page` | int | Pagination |
@@ -900,7 +922,7 @@ optional `Idempotency-Key`.
   "next": "http://backend:8000/api/actions?page=2",
   "previous": null,
   "results": [
-    { "id": 908, "action": "switch_backup", "severity": "HIGH",
+    { "id": 908, "action": "switch_to_backup", "severity": "HIGH",
       "target_model": "model_a", "outcome": "success", "...": "..." }
   ]
 }
@@ -936,7 +958,7 @@ optional `Idempotency-Key`.
     "model_checked": "model_b",
     "baseline_error_rate": 0.0073,
     "post_action_error_rate": 0.004,
-    "post_action_health": "healthy",
+    "post_action_health": "HEALTHY",
     "recovered": true,
     "message": "Backup healthy; error_rate within baseline.",
     "checked_at": "2026-05-30T14:22:30.000Z"
@@ -1103,6 +1125,8 @@ PATCHes the action (Section B.3) with the resolved outcome and verification.
 > agent passes between loop phases **in memory**. The JSON the agent serializes for
 > Django must match these field-for-field (see the
 > [consistency matrix](#cross-surface-consistency-matrix)). Shown as Pydantic v2.
+>
+> **These schemas conform to `conventions.md`, which is authoritative.**
 
 ```python
 # control-plane/agent_core/schemas.py
@@ -1110,7 +1134,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -1118,31 +1142,34 @@ from pydantic import BaseModel, Field
 # ---- Enumerations -------------------------------------------------------
 
 class HealthStatus(str, Enum):
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    UNHEALTHY = "unhealthy"
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+    CRITICAL = "CRITICAL"
+    UNKNOWN = "UNKNOWN"
 
 
 class Severity(str, Enum):
+    NONE = "NONE"
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
 
 
 class ActionType(str, Enum):
     NO_OP = "no_op"
     ALERT = "alert"
+    SWITCH_TO_BACKUP = "switch_to_backup"
     ROLLBACK = "rollback"
-    SWITCH_BACKUP = "switch_backup"
     RETRAIN = "retrain"
     DISABLE_PREDICTIONS = "disable_predictions"
+    ENABLE_PREDICTIONS = "enable_predictions"
 
 
 class Outcome(str, Enum):
     PENDING = "pending"
     SUCCESS = "success"
     FAILED = "failed"
+    REVERTED = "reverted"
     SKIPPED = "skipped"
 
 
@@ -1153,15 +1180,27 @@ class MetricSnapshot(BaseModel):
     JSON-identical to the Django `MetricSnapshotSerializer` body of POST /api/metrics."""
     model_name: str
     model_version: str
+    # system
     request_count: int = 0
     error_count: int = 0
     error_rate: float = 0.0
     avg_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
-    avg_confidence: float = 0.0
+    inference_failure_rate: float = 0.0
+    # performance
+    avg_confidence: Optional[float] = None
     accuracy: Optional[float] = None
-    status: HealthStatus = HealthStatus.HEALTHY
-    window: str = "5m"
+    f1: Optional[float] = None
+    rmse: Optional[float] = None
+    # data quality
+    missing_rate: float = 0.0
+    out_of_range_rate: float = 0.0
+    # drift
+    overall_drift_score: float = 0.0
+    drifted_feature_count: int = 0
+    # status / meta
+    health_status: HealthStatus = HealthStatus.HEALTHY
+    window_seconds: int = 300
     source: str = "agent"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
@@ -1184,17 +1223,17 @@ class Observation(BaseModel):
 # ---- 2. DETECT ----------------------------------------------------------
 
 class DetectionResult(BaseModel):
-    """Output of a detector (threshold / anomaly / drift).
+    """Output of ONE detector evaluation (threshold / anomaly / drift).
     Serialized into ActionLog.detection_signal."""
-    detector: str                         # "threshold_detector" | "anomaly_detector" | "drift_detector"
-    anomaly_detected: bool
-    metric: Optional[str] = None          # e.g. "error_rate", "p95_latency_ms", "avg_confidence"
-    observed: Optional[float] = None
-    threshold: Optional[float] = None
-    window: str = "5m"
-    score: Optional[float] = None         # drift/anomaly score when applicable
-    message: str = ""
-    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    detector: Literal["threshold", "anomaly", "drift"]
+    signal_type: str                      # see conventions §1.5
+    score: float                          # statistic compared against threshold
+    threshold: float
+    breached: bool
+    drifted_features: list[str] = Field(default_factory=list)   # drift only
+    severity_hint: Severity = Severity.NONE
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 # ---- 3. DECIDE ----------------------------------------------------------
@@ -1271,7 +1310,7 @@ both sides or integration breaks.
 | Error rate | `GET /metrics.error_rate` | `MetricSnapshot.error_rate` | `MetricSnapshot.error_rate` |
 | p95 latency | `GET /metrics.p95_latency_ms` | `MetricSnapshot.p95_latency_ms` | `MetricSnapshot.p95_latency_ms` |
 | Avg confidence | `GET /metrics.avg_confidence` | `MetricSnapshot.avg_confidence` | `MetricSnapshot.avg_confidence` |
-| Health | `GET /health.status` | `Observation.health_status` / `MetricSnapshot.status` | `MetricSnapshot.status` |
+| Health | `GET /health.health_status` | `Observation.health_status` / `MetricSnapshot.health_status` | `MetricSnapshot.health_status` |
 | Version | `/predict.model_version`, `/health.version` | `MetricSnapshot.model_version` | `MetricSnapshot.model_version`, `ModelRegistry.version` |
 | Action type | — | `Decision.action` (`ActionType`) | `ActionLog.action` |
 | Severity | — | `Decision.severity` (`Severity`) | `ActionLog.severity` |
@@ -1283,11 +1322,13 @@ both sides or integration breaks.
 
 **Enum value alignment (must be byte-identical across services):**
 
-- `status`: `healthy` / `degraded` / `unhealthy`
-- `severity`: `LOW` / `MEDIUM` / `HIGH` / `CRITICAL`
-- `action`: `no_op` / `alert` / `rollback` / `switch_backup` / `retrain` / `disable_predictions`
-- `outcome`: `pending` / `success` / `failed` / `skipped`
+- `health_status`: `HEALTHY` / `DEGRADED` / `CRITICAL` / `UNKNOWN` (UPPERCASE; `unreachable` maps to `UNKNOWN`)
+- `severity`: `NONE` / `LOW` / `MEDIUM` / `HIGH` (UPPERCASE; no `CRITICAL` — that is health only. Stored severity is `LOW`/`MEDIUM`/`HIGH`)
+- `action`: `no_op` / `alert` / `switch_to_backup` / `rollback` / `retrain` / `disable_predictions` / `enable_predictions`
+- `outcome`: `pending` / `success` / `failed` / `reverted` / `skipped`
 - Jenkins `result → outcome`: `SUCCESS→success`, `FAILURE|ABORTED|UNSTABLE→failed`, `building→pending`
+
+> These values conform to `conventions.md`, which is authoritative.
 
 ---
 
