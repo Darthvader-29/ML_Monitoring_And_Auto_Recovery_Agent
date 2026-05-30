@@ -20,7 +20,9 @@ Monitor → Detect → Decide → Act → Verify → Monitor
 
 ## 🗺️ How to read these docs
 
-If you're new to the project, read in this order:
+If you're new to the project, read in this order (and keep
+**[conventions.md](conventions.md)** open as the normative reference for all
+enum values, schemas, and default parameters — it overrides any other doc):
 
 1. **[architecture.md](architecture.md)** — start here. The big picture: the
    four planes (inference, control plane, execution, observability), the
@@ -57,6 +59,7 @@ If you're new to the project, read in this order:
 
 | Document | What it covers | Primary audience |
 | -------- | -------------- | ---------------- |
+| [conventions.md](conventions.md) | **Authoritative** canonical enums, schemas, and default parameters | Everyone (source of truth) |
 | [architecture.md](architecture.md) | System architecture, planes, topology, end-to-end flow | Everyone |
 | [agent_logic.md](agent_logic.md) | The closed-loop decision engine, severity, policy, state machine, safety | Agent developers |
 | [data_simulation.md](data_simulation.md) | ML task, reference/live data, drift injection, delayed labels | ML/data developers |
@@ -126,9 +129,12 @@ graph TD
 | **backend** | Django + DRF control plane — port **8000** |
 | **agent_core** | The autonomous agent — runs the continuous loop, no web server |
 | **Jenkins** | The recovery executor — runs `deploy/switch/rollback` jobs |
-| **Severity** | `LOW` / `MEDIUM` / `HIGH` |
-| **Health status** | `HEALTHY` / `DEGRADED` / `CRITICAL` / `UNKNOWN` |
-| **Actions** | `NO_OP` / `ALERT` / `SWITCH` / `ROLLBACK` / `RETRAIN` / `DISABLE` |
+| **Severity** | `NONE` / `LOW` / `MEDIUM` / `HIGH` (UPPERCASE) |
+| **Health status** | `HEALTHY` / `DEGRADED` / `CRITICAL` / `UNKNOWN` (UPPERCASE) |
+| **Actions** | `no_op` / `alert` / `switch_to_backup` / `rollback` / `retrain` / `disable_predictions` / `enable_predictions` (lowercase) |
+
+> The exact wire values, schemas, and default parameters are fixed in
+> **[conventions.md](conventions.md)** — the authoritative source of truth.
 | **MetricSnapshot** | The per-tick observation record the agent emits and stores |
 | **Loop phases** | Observe → Detect → Decide → Act → Verify |
 
