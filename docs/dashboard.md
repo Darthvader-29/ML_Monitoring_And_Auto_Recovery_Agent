@@ -54,7 +54,7 @@ concerns of the UI:
 1. **MODEL HEALTH STATUS** — per-model `HEALTHY / DEGRADED / CRITICAL / UNKNOWN`.
 2. **DRIFT INDICATORS** — per-feature PSI scores with severity bands and trend.
 3. **ACTION HISTORY** — the complete, queryable agent audit trail
-   (`NO_OP / ALERT / SWITCH / ROLLBACK / RETRAIN / DISABLE`).
+   (`no_op / alert / switch_to_backup / rollback / retrain / disable_predictions / enable_predictions`).
 
 Beyond those, the UI also surfaces the high-value extras: live metric time-series,
 an incident timeline, and the current active model & version.
@@ -83,7 +83,7 @@ the safety boundaries:
 
 | Control | What it does | Guardrails |
 |---------|--------------|-----------|
-| **Acknowledge alert / incident** | Sets an `acknowledged_by` + `acknowledged_at` on an incident/action row so the team knows a human has seen it. Pure metadata. | Does **not** change fleet state. Requires login (Django auth / staff). POST + CSRF token. Recorded as its own audit entry (`action = ALERT`, `outcome = ACKNOWLEDGED`). |
+| **Acknowledge alert / incident** | Sets an `acknowledged_by` + `acknowledged_at` on an incident/action row so the team knows a human has seen it. Pure metadata. | Does **not** change fleet state. Requires login (Django auth / staff). POST + CSRF token. Recorded as its own audit entry (`action = alert`, `outcome = success`, `acknowledged_by` set). |
 | **Manual rollback / switch trigger** | Submits the *same* parameterized Jenkins job the agent would (`switch_active_model` / `rollback_model`) **via Django → Jenkins**, never from the browser. | Login + `is_staff` required. POST + CSRF. Confirmation modal ("type the model name to confirm"). Passes through the **same `rollback_guard` precondition check** the agent uses (target must be `HEALTHY`). Idempotent: if the requested target is already active, it is a no-op. Every manual trigger is written to `actions_app` with `reason = "manual:<username>"` so it is indistinguishable in auditability from an agent action. Subject to a server-side rate limit (one destructive manual action per model per 60 s). |
 
 > **Boundary reminder:** even a manual rollback goes *Browser → Django → Jenkins*. The
@@ -146,7 +146,8 @@ To keep this spec aligned with `data_model.md` / `monitoring_and_metrics.md` /
 **`monitoring_app` metric row** (per model, per cycle):
 `model_name`, `latency_ms` (p95 latency in ms), `error_rate` (0–1 fraction),
 `accuracy` (0–1), `confidence` (mean predicted-class probability, 0–1),
-`drift_score` (overall PSI / max-feature PSI), `status` (`ok` / `degraded` / `error`),
+`drift_score` (overall PSI / max-feature PSI),
+`health_status` (`HEALTHY` / `DEGRADED` / `CRITICAL` / `UNKNOWN`),
 `ts` (ISO-8601 UTC timestamp).
 
 **Drift detail** (per feature, attached to a metric cycle): `feature_name`, `psi`
@@ -158,14 +159,14 @@ histogram and current histogram for distribution comparison.
 `port` (8001 / 8002).
 
 **`actions_app` action/audit row:** `action`
-(`NO_OP` / `ALERT` / `SWITCH` / `ROLLBACK` / `RETRAIN` / `DISABLE`),
+(`no_op` / `alert` / `switch_to_backup` / `rollback` / `retrain` / `disable_predictions` / `enable_predictions`),
 `severity` (`LOW` / `MEDIUM` / `HIGH`),
-`outcome` (`SUCCESS` / `FAILED` / `ROLLED_BACK` / `NO_OP` / `ACKNOWLEDGED` / `PENDING`),
+`outcome` (`pending` / `success` / `failed` / `reverted` / `skipped`),
 `reason` (human/agent-readable justification string), `target_model`,
 `from_model`, `to_model` (for switches), `incident_id`, `created_at`, `completed_at`.
 
 Health status (`HEALTHY / DEGRADED / CRITICAL / UNKNOWN`) is **derived** by the dashboard
-(or by the agent and stored) from the metric `status` + threshold breaches — see §5.5.
+(or by the agent and stored) from the metric `health_status` + threshold breaches — see §5.5.
 
 ---
 
@@ -191,7 +192,7 @@ The landing page. Goal: in <5 seconds an operator knows the global posture.
 - **Shows:** which model currently serves traffic.
 - **Fields:** `model_name`, `version`, `role = ACTIVE`, `port`, current health badge,
   `latency_ms`, `error_rate`, `accuracy`, `confidence` (latest values), "active since" if
-  derivable from the last `SWITCH`/`ROLLBACK` action.
+  derivable from the last `switch_to_backup`/`rollback` action.
 - **Source:** `registry_app` (`active_flag = True`) joined with latest `monitoring_app` row.
 - **Render:** prominent card with the active model name large, a health badge, and a 2×2
   mini-metric grid. A link "View detail →" to `/dashboard/models/<model_name>/`.
@@ -287,8 +288,8 @@ Deep-dive for one model. Goal: diagnose *why* a model is in its current health.
 
 #### 4.2.5 Version & Activity Info
 - **Shows:** registry facts + recent lifecycle events for this model.
-- **Fields:** `version`, `active_flag`, `status`, list of recent `SWITCH/ROLLBACK/RETRAIN/
-  DISABLE` actions where `target_model`/`from_model`/`to_model` is this model.
+- **Fields:** `version`, `active_flag`, `status`, list of recent `switch_to_backup/rollback/
+  retrain/disable_predictions` actions where `target_model`/`from_model`/`to_model` is this model.
 - **Source:** `registry_app` + `actions_app` filtered to this model.
 - **Render:** small definition list + a compact action sub-table.
 
@@ -351,7 +352,7 @@ Cross-cutting drift focus across all models.
 - **Fields per step:** `created_at`, `action`, `severity`, `reason`, `target_model`,
   `from_model`/`to_model`, `outcome`, `completed_at`.
 - **Render:** vertical stepper; each step a card with the action badge (§5.3) and outcome
-  badge; arrows between steps. A `ROLLED_BACK` outcome renders a distinct red branch.
+  badge; arrows between steps. A `reverted` outcome renders a distinct red branch.
 - **Source:** `actions_app` filtered by `incident_id`, ordered by `created_at`.
 
 #### 4.5.3 Justifying Metrics
@@ -365,9 +366,9 @@ Cross-cutting drift focus across all models.
 The full ACTION HISTORY deliverable.
 
 #### 4.6.1 Filter Bar
-- **Controls:** filter by `action` (multiselect of the 6 action types), `severity`,
+- **Controls:** filter by `action` (multiselect of the canonical action types), `severity`,
   `outcome`, `target_model`, free-text `reason` search, and a date range.
-- **Render:** GET query params (`?action=SWITCH&severity=HIGH&model=model_a`) so filtered
+- **Render:** GET query params (`?action=switch_to_backup&severity=HIGH&model=model_a`) so filtered
   views are bookmarkable/shareable; client-side narrowing for instant feel.
 
 #### 4.6.2 Audit Table
@@ -389,6 +390,8 @@ A single, consistent palette is used everywhere. Colors are defined as CSS varia
 `dashboard.css` and applied via status classes. **Color is never the only signal** — every
 state also carries text and/or an icon/shape (see §9).
 
+> **Note:** Status/severity/action vocabularies follow `conventions.md` (authoritative).
+
 ### 5.1 Health status (model & system)
 
 | Health | Color | CSS var | Hex | Icon/shape | Meaning |
@@ -405,7 +408,7 @@ Applied to: system banner, model cards/headers (left border + badge), model chip
 | Severity | Color | Hex | Badge text |
 |----------|-------|-----|-----------|
 | **LOW** | Slate/blue-grey | `#5f6368` | `LOW` |
-| **MEDIUM** | Amber | `#f9a825` | `MED` |
+| **MEDIUM** | Amber | `#f9a825` | `MEDIUM` |
 | **HIGH** | Red | `#d93025` | `HIGH` |
 
 Rendered as rounded pill badges with white text.
@@ -417,23 +420,23 @@ icon-font dependency):
 
 | Action | Icon | Badge color | Notes |
 |--------|------|-------------|-------|
-| **NO_OP** | ○ | grey | Safe default; low visual weight. |
-| **ALERT** | 🔔 / ! | amber | Informational, no fleet change. |
-| **SWITCH** | ⇄ | blue | Promote backup → active. |
-| **ROLLBACK** | ↩ | purple | Restore previous version. |
-| **RETRAIN** | ⟳ | teal | Retrain-and-deploy (simulated). |
-| **DISABLE** | ⛔ / ▣ | red | Take model out of service. |
+| **no_op** | ○ | grey | Safe default; low visual weight. |
+| **alert** | 🔔 / ! | amber | Informational, no fleet change. |
+| **switch_to_backup** | ⇄ | blue | Promote backup → active. |
+| **rollback** | ↩ | purple | Restore previous version. |
+| **retrain** | ⟳ | teal | Retrain-and-deploy (simulated). |
+| **disable_predictions** | ⛔ / ▣ | red | Take model out of service (fail closed). |
+| **enable_predictions** | ▶ | green | Re-enable a previously disabled model. |
 
 **Outcomes** (badge color):
 
 | Outcome | Color |
 |---------|-------|
-| `SUCCESS` | green |
-| `NO_OP` | grey |
-| `ACKNOWLEDGED` | blue |
-| `PENDING` | amber (animated dot) |
-| `ROLLED_BACK` | purple |
-| `FAILED` | red |
+| `success` | green |
+| `skipped` | grey |
+| `pending` | amber (animated dot) |
+| `reverted` | purple |
+| `failed` | red |
 
 ### 5.4 Drift severity bands (PSI thresholds)
 
@@ -454,9 +457,9 @@ If health is not pre-computed by the agent, the dashboard derives it per model:
 
 ```
 if no metric within STALENESS_SECONDS  -> UNKNOWN
-elif status == "error" OR latency_ms > LATENCY_HARD OR error_rate > ERROR_HARD
+elif health_status == "CRITICAL" OR latency_ms > LATENCY_HARD OR error_rate > ERROR_HARD
      OR accuracy < ACCURACY_HARD OR drift_score > 0.25            -> CRITICAL
-elif status == "degraded" OR latency_ms > LATENCY_SOFT OR error_rate > ERROR_SOFT
+elif health_status == "DEGRADED" OR latency_ms > LATENCY_SOFT OR error_rate > ERROR_SOFT
      OR accuracy < ACCURACY_SOFT OR drift_score >= 0.10           -> DEGRADED
 else                                                              -> HEALTHY
 ```
@@ -492,12 +495,12 @@ read from Django settings / `.env`, never hard-coded in templates.
 │ └───────────────────────────┘                                                      │
 ├──────────────────────────────────────────────┬───────────────────────────────────┤
 │ RECENT ACTIONS                  View full log→ │ ACTIVE INCIDENTS                  │
-│ ┌────────┬────────┬──────┬───────┬──────────┐ │ ┌───────────────────────────────┐ │
-│ │ 12:00  │⇄ SWITCH│ HIGH │SUCCESS│ acc<floor│ │ │ #42  HIGH  model_a            │ │
-│ │ 11:58  │🔔 ALERT│ MED  │  —    │drift amber│ │ │ status: RECOVERING            │ │
-│ │ 11:55  │○ NO_OP │ LOW  │ NO_OP │stable    │ │ │ last: SWITCH→model_b SUCCESS  │ │
-│ │ 11:50  │○ NO_OP │ LOW  │ NO_OP │stable    │ │ │ [Acknowledge]  [Open detail→] │ │  ← (Ack only if enabled)
-│ └────────┴────────┴──────┴───────┴──────────┘ │ └───────────────────────────────┘ │
+│ ┌──────┬───────────────────┬──────┬───────┐    │ ┌───────────────────────────────┐ │
+│ │12:00 │⇄ switch_to_backup │ HIGH │success│    │ │ #42  HIGH  model_a            │ │
+│ │11:58 │🔔 alert           │MEDIUM│pending│    │ │ status: RECOVERING            │ │
+│ │11:55 │○ no_op            │ LOW  │skipped│    │ │ last: switch→model_b success  │ │
+│ │11:50 │○ no_op            │ LOW  │skipped│    │ │ [Acknowledge]  [Open detail→] │ │  ← (Ack only if enabled)
+│ └──────┴───────────────────┴──────┴───────┘    │ └───────────────────────────────┘ │
 └──────────────────────────────────────────────┴───────────────────────────────────┘
         Last updated 12:00:05 UTC · auto-refresh 10s · times shown in UTC
 ```
@@ -528,7 +531,7 @@ read from Django settings / `.env`, never hard-coded in templates.
 │                                           │     └──────────────── time →          │ │
 │                                           └──────────────────────────────────────┘ │
 ├──────────────────────────────────────────────────────────────────────────────────┤
-│ VERSION & ACTIVITY   version 1.4.2 · active · recent: ⇄SWITCH(in) ↩ROLLBACK ...    │  ← version/activity (§4.2.5)
+│ VERSION & ACTIVITY   version 1.4.2 · active · recent: ⇄switch_to_backup ↩rollback   │  ← version/activity (§4.2.5)
 └──────────────────────────────────────────────────────────────────────────────────┘
         Last updated 12:00:05 UTC · auto-refresh 10s · UTC
 ```
@@ -588,7 +591,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from monitoring_app.models import MetricSample          # latency_ms, error_rate, accuracy,
-from registry_app.models import Model                    #   confidence, drift_score, status, ts
+from registry_app.models import Model                    #   confidence, drift_score, health_status, ts
 from actions_app.models import ActionLog                 # action, severity, outcome, reason, ...
 
 STALENESS_SECONDS = 60
@@ -600,11 +603,11 @@ def derive_health(sample):
     """Map the latest metric sample to HEALTHY/DEGRADED/CRITICAL/UNKNOWN (see spec §5.5)."""
     if sample is None or (timezone.now() - sample.ts).total_seconds() > STALENESS_SECONDS:
         return "UNKNOWN"
-    if (sample.status == "error" or sample.latency_ms > HARD["latency_ms"]
+    if (sample.health_status == "CRITICAL" or sample.latency_ms > HARD["latency_ms"]
             or sample.error_rate > HARD["error_rate"] or sample.accuracy < HARD["accuracy"]
             or (sample.drift_score or 0) > 0.25):
         return "CRITICAL"
-    if (sample.status == "degraded" or sample.latency_ms > SOFT["latency_ms"]
+    if (sample.health_status == "DEGRADED" or sample.latency_ms > SOFT["latency_ms"]
             or sample.error_rate > SOFT["error_rate"] or sample.accuracy < SOFT["accuracy"]
             or (sample.drift_score or 0) >= 0.10):
         return "DEGRADED"
@@ -633,7 +636,7 @@ def overview(request):
 
     recent_actions = ActionLog.objects.order_by("-created_at")[:10]
     open_incidents = (ActionLog.objects
-                      .exclude(outcome__in=["SUCCESS", "NO_OP"])
+                      .exclude(outcome__in=["success", "skipped"])
                       .filter(created_at__gte=timezone.now() - timedelta(hours=24))
                       .values("incident_id", "severity", "target_model")
                       .distinct())
@@ -759,12 +762,12 @@ footer, and links `dashboard.css`.
 ## 10. Tying the Loop Together
 
 **What an operator sees during a live degradation + recovery** (read alongside
-`failure_scenarios.md` — e.g. the *"active model accuracy degradation → SWITCH to backup"*
+`failure_scenarios.md` — e.g. the *"active model accuracy degradation → switch_to_backup"*
 scenario):
 
 1. **Steady state.** Overview shows `SYSTEM: HEALTHY`, active model **model_a v1.4.2**
    green, all KPI tiles within thresholds, `model_b` BACKUP green. Recent Actions are a
-   quiet run of `NO_OP / LOW`. Active Incidents reads *"system nominal."*
+   quiet run of `no_op / LOW`. Active Incidents reads *"system nominal."*
 
 2. **Drift creeps in (Observe + Detect).** Over a few cycles the **Drift** tile on Overview
    turns amber, and the active model's chip shows an amber drift dot. On **Model Detail →
@@ -774,25 +777,25 @@ scenario):
 
 3. **Health flips (Detect).** The active-model card and system banner turn **DEGRADED**,
    then **CRITICAL** as `accuracy` breaches the hard floor. Recent Actions shows a
-   `🔔 ALERT / MEDIUM` row appear (the agent recording evidence before acting). The
+   `🔔 alert / MEDIUM` row appear (the agent recording evidence before acting). The
    "Last updated" stamp confirms this is fresh within one refresh interval.
 
-4. **The agent decides and acts (Decide + Act).** A new row lands: `⇄ SWITCH / HIGH`,
+4. **The agent decides and acts (Decide + Act).** A new row lands: `⇄ switch_to_backup / HIGH`,
    `from_model=model_a → to_model=model_b`, `reason="accuracy<floor; feat_1,feat_3 PSI>0.25"`,
-   `outcome=PENDING` (animated). An **Active Incident #42** opens with status `OPEN →
+   `outcome=pending` (animated). An **Active Incident #42** opens with status `OPEN →
    RECOVERING`. (Behind the scenes this is the agent → Jenkins `switch_active_model`
    pipeline; the dashboard only mirrors the resulting state.)
 
 5. **Recovery verified (Verify).** Within a cycle the Active Model card now shows
-   **model_b v1.4.1** as ACTIVE and **HEALTHY**; the SWITCH row's outcome flips to
-   `SUCCESS`. The system banner returns to green. Incident #42 moves to `RESOLVED` with a
+   **model_b v1.4.1** as ACTIVE and **HEALTHY**; the switch_to_backup row's outcome flips to
+   `success`. The system banner returns to green. Incident #42 moves to `RESOLVED` with a
    recorded duration. (If `rollback_guard` had found model_b *worse*, the operator would
-   instead see a `↩ ROLLBACK / ROLLED_BACK` branch in the incident's **action chain** —
+   instead see a `↩ rollback / reverted` branch in the incident's **action chain** —
    the dashboard renders that distinct red path.)
 
 6. **The audit trail (transparency).** Opening **Incident #42 detail**, the operator reads
    the entire chain as a stepper — *Detect (drift/accuracy breach) → Decide (HIGH →
-   SWITCH) → Act (Jenkins switch) → Verify (model_b healthy)* — each step time-stamped with
+   switch_to_backup) → Act (Jenkins switch) → Verify (model_b healthy)* — each step time-stamped with
    its `reason` and `outcome`, the justifying metric chart shaded across the incident
    window. The full **Action Log** keeps the permanent, filterable record.
 

@@ -563,10 +563,10 @@ sequenceDiagram
     Note over L: ── VERIFY ──
     L->>VER: health_check.run()
     VER->>MB: GET /health
-    MB-->>VER: 200 {status:"ok"}
+    MB-->>VER: 200 {health_status:"HEALTHY"}
     VER->>VER: rollback_guard.evaluate()
     alt verification OK
-        VER-->>L: outcome = SUCCESS
+        VER-->>L: outcome = success
     else worse than before
         VER->>JC: trigger(rollback_model)
         JC->>JK: POST /job/rollback_model

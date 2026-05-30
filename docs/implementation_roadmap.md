@@ -147,7 +147,7 @@ Phases are cumulative. Each lists: **Objective**, **Exit criteria**, **Tasks →
 ### Phase 5 — Recovery via Jenkins + Docker (swappable execution backend)
 
 - **Objective:** Swap the direct-API switch for **Jenkins-triggered recovery jobs**, and package components in Docker — **without breaking the loop.**
-- **Exit criteria — done when:** `switch_model`/rollback go through `jenkins_client.py` triggering Jenkins jobs, and the full stack runs under `docker-compose`. The direct-API executor remains available as a fallback.
+- **Exit criteria — done when:** `switch_to_backup`/rollback go through `jenkins_client.py` triggering Jenkins jobs, and the full stack runs under `docker-compose`. The direct-API executor remains available as a fallback.
 - **Tasks → files:**
   - `devops/jenkins/jobs/deploy_model.groovy`, `switch_active_model.groovy`, `rollback_model.groovy` + `devops/jenkins/_files/Jenkinsfile`: implement the recovery jobs per `deployment_and_devops.md`.
   - `agent_core/clients/jenkins_client.py`: trigger jobs, poll build status.

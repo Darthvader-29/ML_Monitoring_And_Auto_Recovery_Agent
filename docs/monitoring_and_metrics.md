@@ -278,7 +278,7 @@ Two distinct windows exist and should not be conflated:
 | Window | Where | Default size | Used for |
 |---|---|---|---|
 | Service request window | model service `metrics.py` | last **200** requests | latency percentiles, in-process error_rate |
-| Agent observation window | agent monitoring store | last **50** ticks (or last **500** predictions, whichever the config sets) | rolling accuracy/F1, confidence trend, drift trend |
+| Agent observation window | agent monitoring store | last **10** ticks (`ROLLING_WINDOW_SIZE`, ≈5 min; or last **500** predictions, whichever the config sets) | rolling accuracy/F1, confidence trend, drift trend |
 
 ### 4.2 Window sizing rationale
 
@@ -329,6 +329,11 @@ The single object the agent emits each tick. It is the payload of `POST /api/met
 [`data_model.md`](./data_model.md)), and the input to all detectors (see
 [`detection_methods.md`](./detection_methods.md)). All three **must** stay aligned with this table.
 
+> **Note:** Canonical schema/enums in `conventions.md` (authoritative). The core
+> wire fields and enum casing below conform to `conventions.md §2`; the additional
+> rows here (e.g. `pred_class_distribution`, `feature_drift_psi`, percentile
+> latencies) are documentation extensions carried in the snapshot's `raw` JSON.
+
 | Field | Type | Nullable | Description |
 |---|---|---|---|
 | `snapshot_id` | string (uuid) | no | Unique id for this snapshot. |
@@ -336,6 +341,7 @@ The single object the agent emits each tick. It is the payload of `POST /api/met
 | `timestamp` / `captured_at` | string (ISO-8601 UTC) | no | When the snapshot was assembled. |
 | `window_start` | string (ISO-8601 UTC) | no | Start of the observation window. |
 | `window_end` | string (ISO-8601 UTC) | no | End of the observation window. |
+| `window_seconds` | int | no | Length of the rolling window in seconds (default `300`; see `conventions.md §2`). |
 | `model_name` | string | no | Logical model being observed (e.g. `model_a`). |
 | `model_version` | string | yes | Active model version, if known. |
 | `endpoint` | string | no | Base URL of the probed service (e.g. `http://model_a:8001`). |
@@ -386,6 +392,7 @@ Example payload:
   "timestamp": "2026-05-30T10:15:03Z",
   "window_start": "2026-05-30T10:10:00Z",
   "window_end": "2026-05-30T10:15:00Z",
+  "window_seconds": 300,
   "model_name": "model_a",
   "model_version": "1.3.0",
   "endpoint": "http://model_a:8001",
@@ -497,7 +504,7 @@ Metrics are not collected for their own sake — every metric exists to drive on
   The "Consumed by" column in [Section 2](#2-metric-catalogue) is the explicit wiring.
 - **Decision** ([`agent_logic.md`](./agent_logic.md)): detector outputs are classified into a
   severity (`severity_classifier.py`) and mapped to an action by `policy_rules.py` — e.g. a
-  CRITICAL accuracy/drift combination → `switch_model`; a DEGRADED system signal → `alert`; nothing
+  CRITICAL accuracy/drift combination → `switch_to_backup`; a DEGRADED system signal → `alert`; nothing
   actionable → `no_op`.
 - **Verification** ([`agent_logic.md`](./agent_logic.md), `verification/`): after an action, fresh
   snapshots are compared against the **baseline** (Section 6) to confirm recovery; if metrics do not
@@ -516,10 +523,11 @@ are the shipped defaults. Detection thresholds are owned by
 
 | Setting | Default | Notes |
 |---|---|---|
-| Agent tick interval | **10 s** | One snapshot per tick. |
+| Agent tick interval (`AGENT_TICK_INTERVAL_SECONDS`) | **30 s** | One snapshot per tick (`conventions.md §3`). |
+| `METRIC_WINDOW_SECONDS` | **300** | `MetricSnapshot.window_seconds` (`conventions.md §3`). |
+| `ROLLING_WINDOW_SIZE` (ticks) | **10** (≈5 min) | Sliding window for trends (`conventions.md §3`). |
 | Predict batch size per tick (`N`) | **50 rows** | Tumbling input batch. |
 | Service latency window | **200 requests** | Ring buffer for percentiles. |
-| Agent observation window | **50 ticks / 500 predictions** | Sliding window for trends. |
 | `min_labels_for_accuracy` | **30** | Below this, accuracy/F1 = `null`. |
 | Percentile method | **nearest-rank**, `ceil(q·n)-1` | p50 / p95 / p99. |
 | Confidence histogram bins | **10** (width 0.1) | `confidence_distribution`. |

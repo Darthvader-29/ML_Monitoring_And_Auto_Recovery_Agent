@@ -144,6 +144,9 @@ def main():
     runtime  = AgentRuntime(cfg)             # rolling windows, counters, cooldowns, state
     install_signal_handlers(runtime)         # SIGINT/SIGTERM -> runtime.stop_requested
 
+    # AGENT_STARTED / AGENT_STOPPED / TICK_ERROR (severity="INFO") are operational
+    # lifecycle log events for observability — NOT recovery actions, so they are not
+    # subject to the ActionType / Severity enums in conventions.md.
     log_audit(django, action="AGENT_STARTED", severity="INFO", outcome="success")
     runtime.state = State.HEALTHY
 
