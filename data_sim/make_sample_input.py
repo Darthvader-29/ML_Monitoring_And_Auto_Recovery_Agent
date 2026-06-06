@@ -39,12 +39,16 @@ def main() -> None:
     baseline = generate_baseline(N_SAMPLE, seed=101)
     baseline = _with_request_ids(baseline, seed=101)
 
-    # Drifted variant: sudden device_risk shift (0.30 -> ~0.65) + +60% amount
-    # inflation (data_simulation.md §5.1/§5.2). Same rows, perturbed inputs.
+    # Drifted variant: a multi-feature sudden shift (data_simulation.md §5.1/§5.2)
+    # large enough that the aggregate share-of-drifted-features crosses the
+    # detector's threshold (>=0.30) — here 4 of 8 features move, so the agent sees
+    # HIGH data drift, not just isolated per-feature noise.
     drift = generate_baseline(N_SAMPLE, seed=202)
     rng = np.random.default_rng(202)
     drift["device_risk"] = np.clip(rng.normal(0.65, 0.15, len(drift)), 0, 1)
     drift["amount"] = np.clip(drift["amount"] * 1.60, 0, 100_000)
+    drift["avg_txn_amount"] = np.clip(drift["avg_txn_amount"] * 1.8 + 200, 0, 50_000)
+    drift["num_txn_24h"] = np.clip(drift["num_txn_24h"] + 9, 0, 200)
     drift = _with_request_ids(drift, seed=202)
 
     for d in MODEL_DIRS:

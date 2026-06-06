@@ -20,6 +20,10 @@ FEATURE_COLS = NUMERIC_COLS + CATEGORICAL_COLS
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_SAMPLE = (_REPO_ROOT / "model-services" / "model_a" / "sample_input.csv")
 _DRIFT_SAMPLE = (_REPO_ROOT / "model-services" / "model_a" / "sample_input_drift.csv")
+# Larger varied batches (>=200 rows) for the drift detector (detection_methods.md §4.1).
+_FIXTURES = _REPO_ROOT / "data_sim" / "fixtures"
+_BASELINE_BATCH = _FIXTURES / "baseline_batch.csv"
+_DRIFT_BATCH = _FIXTURES / "drift_batch.csv"
 
 
 def _coerce(row: dict) -> dict:
@@ -36,12 +40,22 @@ def _coerce(row: dict) -> dict:
 
 
 def load_rows(path: Path | str | None = None, drift: bool = False) -> list[dict]:
-    """Load feature dicts from a sample CSV. `drift=True` loads the drifted variant
-    (used to exercise the recovery loop / drift detector tests)."""
+    """Load the small hand-checkable sample (25 rows) for the prediction probe.
+    `drift=True` loads the drifted variant."""
     if path is None:
         path = _DRIFT_SAMPLE if drift else _DEFAULT_SAMPLE
     path = Path(path)
     if not path.exists():
         return []
+    with path.open(newline="") as fh:
+        return [_coerce(row) for row in csv.DictReader(fh)]
+
+
+def load_batch(drift: bool = False) -> list[dict]:
+    """Load a large varied batch (>=200 rows) for the drift detector. Falls back to
+    the small sample if the fixtures have not been generated (`make data`)."""
+    path = _DRIFT_BATCH if drift else _BASELINE_BATCH
+    if not path.exists():
+        return load_rows(drift=drift)
     with path.open(newline="") as fh:
         return [_coerce(row) for row in csv.DictReader(fh)]

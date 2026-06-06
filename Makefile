@@ -17,7 +17,7 @@ AGENT_DIR   := control-plane/agent_core
 
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
-        env data generate-data train-models sample-input \
+        env data generate-data train-models sample-input live-batch reference-summary \
         run-model-a run-model-b run-backend agent demo verify-config \
         test test-unit test-int test-e2e clean
 
@@ -74,9 +74,9 @@ env:
 
 # ---- Data & models (Phase 1; needs venva — run `make setup-model-a`) ----
 
-## Generate reference data, train both models, and refresh sample inputs
-data: generate-data train-models sample-input
-	@echo "==> Data + models ready (model.pkl, sample_input.csv in each service)."
+## Generate reference data, train models, sample inputs, and drift reference
+data: generate-data train-models sample-input live-batch reference-summary
+	@echo "==> Data + models ready (model.pkl, sample_input.csv, reference_window.json)."
 
 ## Generate the frozen 20k reference dataset (data_sim/artifacts/reference.csv)
 generate-data:
@@ -89,6 +89,14 @@ train-models:
 ## Refresh committed sample_input.csv (+ drift variant) in both services
 sample-input:
 	cd data_sim && $(VENVA_PY) make_sample_input.py
+
+## Generate committed live-batch fixtures (data_sim/fixtures/*_batch.csv)
+live-batch:
+	cd data_sim && $(VENVA_PY) make_live_batch.py
+
+## Build the committed drift reference window (detection/reference_window.json)
+reference-summary:
+	cd data_sim && $(VENVA_PY) build_reference_summary.py
 
 # ---- Run components (wired now; serve once Phase 1+ fills the modules) ---
 

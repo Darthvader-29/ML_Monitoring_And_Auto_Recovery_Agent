@@ -30,7 +30,9 @@ import config                                      # noqa: E402
 from schemas import (ActionType, HealthStatus, MetricSnapshot,  # noqa: E402
                      Outcome, Severity)
 from monitoring import data_loader, model_probe, prediction_probe  # noqa: E402
-from detection import anomaly_detector, drift_detector, threshold_detector  # noqa: E402
+from detection import threshold_detector  # noqa: E402
+from detection.anomaly_detector import AnomalyDetector  # noqa: E402
+from detection.drift_detector import DriftDetector  # noqa: E402
 from decision_engine import decision as decision_engine  # noqa: E402
 from actions import alert, no_op, switch_model  # noqa: E402
 from verification import health_check, rollback_guard  # noqa: E402
@@ -68,13 +70,15 @@ def _build_runtime(args) -> AgentRuntime:
     )
 
 
-def run_tick(runtime: AgentRuntime, dj, tick: int) -> dict:
+def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
     """One full Observe->Detect->Decide->Act->Verify cycle. Returns an episode dict."""
+    anomaly_det, drift_det = detectors
     active = runtime.active_model
     backup = runtime.backup_model()
     endpoint = runtime.endpoint_for(active)
 
     # ---- OBSERVE (predict first so /metrics reflects this tick) ----
+    rows = []
     try:
         rows = data_loader.load_rows(drift=runtime.inject_drift)
         pred = prediction_probe.probe_predictions(endpoint, rows)
@@ -94,13 +98,23 @@ def run_tick(runtime: AgentRuntime, dj, tick: int) -> dict:
     backup_healthy = bool(backup_health and backup_health.reachable
                           and backup_health.status == HealthStatus.HEALTHY)
 
-    # ---- DETECT (threshold active; anomaly/drift stubbed until Phase 3) ----
+    # ---- DETECT (all three channels: threshold + anomaly + drift) ----
     detections = threshold_detector.detect(
         metrics, reachable=health.reachable, health_status=health.status,
         consecutive_health_failures=runtime.consecutive_health_failures,
         inference_failure_rate=pred.inference_failure_rate)
-    detections += anomaly_detector.detect()
-    detections += drift_detector.detect()
+    if metrics is not None:
+        detections += anomaly_det.evaluate({
+            "error_rate": metrics.error_rate,
+            "avg_latency_ms": metrics.avg_latency_ms,
+            "p95_latency_ms": metrics.p95_latency_ms,
+            "inference_failure_rate": pred.inference_failure_rate,
+            "avg_confidence": metrics.avg_confidence,
+        })
+    # Drift uses a large varied batch (>=200 rows), decoupled from the small
+    # prediction sample above (detection_methods.md §4.1).
+    detections += drift_det.evaluate_data_drift(
+        data_loader.load_batch(drift=runtime.inject_drift))
 
     # ---- DECIDE (severity + anti-flap gating) ----
     from decision_engine import severity_classifier
@@ -158,6 +172,7 @@ def run_tick(runtime: AgentRuntime, dj, tick: int) -> dict:
 
 def run(runtime: AgentRuntime, ticks: Optional[int], interval: float) -> list[dict]:
     dj = django_client.get_client()
+    detectors = (AnomalyDetector(), DriftDetector())  # stateful across ticks
     log.info("agent start: active=%s executor=%s interval=%ss ticks=%s",
              runtime.active_model, config.settings.executor_type, interval,
              ticks if ticks is not None else "inf")
@@ -165,7 +180,7 @@ def run(runtime: AgentRuntime, ticks: Optional[int], interval: float) -> list[di
     try:
         while ticks is None or tick < ticks:
             tick += 1
-            episodes.append(run_tick(runtime, dj, tick))
+            episodes.append(run_tick(runtime, dj, detectors, tick))
             if ticks is None or tick < ticks:
                 time.sleep(interval)
     except KeyboardInterrupt:
