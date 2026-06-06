@@ -1,48 +1,134 @@
 """Client for the Django control plane (metrics / registry / audit).
 
-Phase 2 ships a NULL client: it satisfies the interface the loop calls but only
-logs — there is no Django backend yet (MVP keeps state in-memory and audits to
-stdout). Phase 4 replaces NullDjangoClient with a real `requests`-based client
-hitting /api/metrics, /api/active-model and /api/actions (api_contracts.md §B).
+Phase 4: a real `requests`-based client hitting /api/metrics, /api/active-model and
+/api/actions (api_contracts.md §B). Every call is resilient — a backend error is
+logged and swallowed so the control loop never crashes on a persistence hiccup
+(the agent's in-memory state remains the live source of truth).
 
-`get_client()` is the single construction point so the loop is agnostic to which
-implementation is active.
+get_client() probes the backend once: if reachable it returns the real client,
+otherwise the NullDjangoClient (so the loop still runs with stdout-only audit, as
+in Phases 2-3).
 """
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from schemas import ActionResult, Decision, MetricSnapshot, VerificationResult
+import requests
+
+import config
+from schemas import ActionResult, Decision, MetricSnapshot, Outcome, VerificationResult
 
 log = logging.getLogger("agent.clients.django")
 
+_TIMEOUT = (config.settings.http_connect_timeout_seconds,
+            config.settings.http_read_timeout_seconds)
+
 
 class NullDjangoClient:
-    """No-op implementation used until the Django backend exists (Phase 4)."""
+    """No-op implementation used when no backend is reachable."""
 
     enabled = False
 
     def post_metrics(self, snapshot: MetricSnapshot) -> None:
-        log.debug("post_metrics (null): %s err=%.3f", snapshot.model_name,
-                  snapshot.error_rate)
+        log.debug("post_metrics (null): %s err=%.3f", snapshot.model_name, snapshot.error_rate)
 
     def get_active_model(self) -> Optional[str]:
-        return None  # MVP: the agent's in-memory pointer is the source of truth
+        return None
 
     def set_active_model(self, model_name: str, reason: str = "") -> None:
         log.info("set_active_model (null): %s (%s)", model_name, reason)
 
     def post_action(self, decision: Decision, result: ActionResult) -> Optional[int]:
-        log.debug("post_action (null): %s -> %s", decision.action.value, result.outcome.value)
         return None
+
+    def patch_action(self, action_id: Optional[int], verification: VerificationResult) -> None:
+        pass
+
+
+class DjangoClient:
+    """Real HTTP client to the Django control plane."""
+
+    enabled = True
+
+    def __init__(self, base_url: str, token: str = "") -> None:
+        self._base = base_url.rstrip("/")
+        self._headers = {"Content-Type": "application/json"}
+        if token:
+            self._headers["Authorization"] = f"Token {token}"
+
+    def _post(self, path: str, body: dict) -> Optional[dict]:
+        try:
+            r = requests.post(f"{self._base}{path}", json=body,
+                              headers=self._headers, timeout=_TIMEOUT)
+            if r.status_code < 300:
+                return r.json()
+            log.warning("POST %s -> %s", path, r.status_code)
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("POST %s failed: %s", path, exc)
+        return None
+
+    def post_metrics(self, snapshot: MetricSnapshot) -> None:
+        self._post("/api/metrics", {
+            "model_name": snapshot.model_name,
+            "model_version": snapshot.model_version,
+            "request_count": snapshot.request_count,
+            "error_count": snapshot.error_count,
+            "error_rate": snapshot.error_rate,
+            "avg_latency_ms": snapshot.avg_latency_ms,
+            "p95_latency_ms": snapshot.p95_latency_ms,
+            "avg_confidence": snapshot.avg_confidence,
+            "accuracy": snapshot.accuracy,
+            "status": snapshot.status.value,
+            "timestamp": snapshot.timestamp.isoformat(),
+        })
+
+    def get_active_model(self) -> Optional[str]:
+        try:
+            r = requests.get(f"{self._base}/api/active-model",
+                             headers=self._headers, timeout=_TIMEOUT)
+            if r.status_code == 200:
+                return r.json().get("model_name")
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("get_active_model failed: %s", exc)
+        return None
+
+    def set_active_model(self, model_name: str, reason: str = "") -> None:
+        self._post("/api/active-model", {"model_name": model_name, "reason": reason})
+
+    def post_action(self, decision: Decision, result: ActionResult) -> Optional[int]:
+        sig = (decision.detection_signal.model_dump(mode="json")
+               if decision.detection_signal else None)
+        body = self._post("/api/actions", {
+            "action": decision.action.value, "severity": decision.severity.value,
+            "target_model": decision.target_model, "reason": decision.reason,
+            "outcome": result.outcome.value, "detection_signal": sig,
+        })
+        return body.get("id") if body else None
 
     def patch_action(self, action_id: Optional[int],
                      verification: VerificationResult) -> None:
-        log.debug("patch_action (null): recovered=%s", verification.recovered)
+        if action_id is None:
+            return
+        outcome = Outcome.SUCCESS if verification.recovered else Outcome.FAILED
+        try:
+            requests.patch(f"{self._base}/api/actions/{action_id}",
+                           json={"outcome": outcome.value,
+                                 "verification": verification.model_dump(mode="json")},
+                           headers=self._headers, timeout=_TIMEOUT)
+        except requests.RequestException as exc:
+            log.warning("patch_action failed: %s", exc)
 
 
 def get_client():
-    """Return the active Django client. Phase 4 will return the real HTTP client
-    when a backend URL/token is configured."""
+    """Return the real client if the backend answers, else the null client."""
+    base = config.settings.backend_url
+    try:
+        r = requests.get(f"{base.rstrip('/')}/api/health/", timeout=(1.0, 1.5))
+        if r.status_code == 200:
+            log.info("Django backend reachable at %s — persistence enabled", base)
+            return DjangoClient(base, config.settings.django_api_token)
+    except requests.RequestException:
+        pass
+    log.info("Django backend not reachable — running with stdout-only audit")
     return NullDjangoClient()

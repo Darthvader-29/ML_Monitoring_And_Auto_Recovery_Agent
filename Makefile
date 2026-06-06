@@ -18,7 +18,7 @@ AGENT_DIR   := control-plane/agent_core
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
         env data generate-data train-models sample-input live-batch reference-summary \
-        run-model-a run-model-b run-backend agent demo verify-config \
+        run-model-a run-model-b backend-init run-backend agent demo verify-config \
         test test-unit test-int test-e2e clean
 
 # data_sim scripts run under venva (has sklearn/pandas/numpy/joblib) and import
@@ -108,7 +108,12 @@ run-model-a:
 run-model-b:
 	cd $(MODEL_B_DIR) && venvb/bin/uvicorn app:app --host 0.0.0.0 --port 8002 --reload
 
-## Run the Django control plane on :8000  [needs Phase 4]
+## Initialize the backend DB (migrate + seed registry)
+backend-init:
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py migrate --noinput
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py seed_demo
+
+## Run the Django control plane on :8000
 run-backend:
 	cd $(BACKEND_DIR) && venvc/bin/python manage.py runserver 0.0.0.0:8000
 

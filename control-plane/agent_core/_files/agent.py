@@ -172,6 +172,11 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
 
 def run(runtime: AgentRuntime, ticks: Optional[int], interval: float) -> list[dict]:
     dj = django_client.get_client()
+    # Phase 4: the registry is the source of truth for the active model across
+    # restarts; adopt it if the backend knows one.
+    registry_active = dj.get_active_model()
+    if registry_active in MODELS:
+        runtime.active_model = registry_active
     detectors = (AnomalyDetector(), DriftDetector())  # stateful across ticks
     log.info("agent start: active=%s executor=%s interval=%ss ticks=%s",
              runtime.active_model, config.settings.executor_type, interval,
