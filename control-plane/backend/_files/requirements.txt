@@ -1,0 +1,8 @@
+# backend (control plane) — Django + DRF, venvc
+# requests is used by server-side calls/tests; gunicorn is the prod server
+# (deployment_and_devops.md §2.3). Uncomment psycopg2-binary to use Postgres.
+django==5.1.2
+djangorestframework==3.15.2
+requests==2.32.3
+gunicorn==23.0.0
+# psycopg2-binary==2.9.9

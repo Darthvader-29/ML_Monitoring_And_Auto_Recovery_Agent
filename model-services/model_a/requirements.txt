@@ -1,0 +1,9 @@
+# model_a (ACTIVE) — FastAPI inference service, venva
+# The scikit-learn version MUST match the one that pickled model.pkl
+# (see deployment_and_devops.md §1.3). Keep pins consistent across model_a/model_b.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+scikit-learn==1.5.2
+pandas==2.2.3
+numpy==2.1.2
+pydantic==2.9.2

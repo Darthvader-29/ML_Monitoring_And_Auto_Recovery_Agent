@@ -1,0 +1,8 @@
+# agent_core (the agent) — pure outbound HTTP client, venvd
+# requests + pydantic for transport/schemas; numpy/scipy/pandas back the
+# statistical detectors added in Phases 2-3 (detection_methods.md).
+requests==2.32.3
+pydantic==2.9.2
+numpy==2.1.2
+pandas==2.2.3
+scipy==1.14.1

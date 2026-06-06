@@ -1,0 +1,112 @@
+# Makefile (repo root) — Autonomous ML Monitoring & Auto-Recovery Agent
+#
+# Phase 0 operator ergonomics: one venv per service (venva/venvb/venvc/venvd),
+# matching docs/deployment_and_devops.md §8 (local dev without Docker). The
+# Docker/compose workflow (docs §3, §5) arrives in Phase 5 and will extend this file.
+#
+# Quick start:  make setup   # build all four venvs + install deps
+#               make help    # list every target
+
+PYTHON ?= python3
+
+# Service directories (the venv lives inside each, per docs §8)
+MODEL_A_DIR := model-services/model_a
+MODEL_B_DIR := model-services/model_b
+BACKEND_DIR := control-plane/backend
+AGENT_DIR   := control-plane/agent_core
+
+.DEFAULT_GOAL := help
+.PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
+        env run-model-a run-model-b run-backend agent verify-config \
+        test test-unit test-int test-e2e clean
+
+## Show this help (default)
+help:
+	@echo "Autonomous ML Monitoring & Auto-Recovery Agent — make targets:"
+	@echo ""
+	@grep -E '^## ' -A1 $(MAKEFILE_LIST) | \
+	  awk '/^## / {desc=substr($$0,4)} /^[a-zA-Z0-9_-]+:/ {printf "  \033[36m%-16s\033[0m %s\n", substr($$1,1,length($$1)-1), desc}'
+	@echo ""
+
+# ---- Setup: one isolated venv per service -------------------------------
+
+## Build all four venvs (venva/venvb/venvc/venvd) and install their deps
+setup: setup-model-a setup-model-b setup-backend setup-agent
+	@echo "==> All venvs ready. Next: implement Phase 1 (model services)."
+
+setup-model-a:
+	@echo "==> venva: $(MODEL_A_DIR)"
+	$(PYTHON) -m venv $(MODEL_A_DIR)/venva
+	$(MODEL_A_DIR)/venva/bin/pip install --upgrade pip
+	$(MODEL_A_DIR)/venva/bin/pip install -r $(MODEL_A_DIR)/requirements.txt
+
+setup-model-b:
+	@echo "==> venvb: $(MODEL_B_DIR)"
+	$(PYTHON) -m venv $(MODEL_B_DIR)/venvb
+	$(MODEL_B_DIR)/venvb/bin/pip install --upgrade pip
+	$(MODEL_B_DIR)/venvb/bin/pip install -r $(MODEL_B_DIR)/requirements.txt
+
+setup-backend:
+	@echo "==> venvc: $(BACKEND_DIR)"
+	$(PYTHON) -m venv $(BACKEND_DIR)/venvc
+	$(BACKEND_DIR)/venvc/bin/pip install --upgrade pip
+	$(BACKEND_DIR)/venvc/bin/pip install -r $(BACKEND_DIR)/_files/requirements.txt
+
+setup-agent:
+	@echo "==> venvd: $(AGENT_DIR)"
+	$(PYTHON) -m venv $(AGENT_DIR)/venvd
+	$(AGENT_DIR)/venvd/bin/pip install --upgrade pip
+	$(AGENT_DIR)/venvd/bin/pip install -r $(AGENT_DIR)/_files/requirements.txt
+
+## Create a local .env from .env.example (does not overwrite an existing .env)
+env:
+	@if [ -f .env ]; then \
+	  echo ".env already exists — leaving it untouched."; \
+	else \
+	  cp .env.example .env && \
+	  echo "Created .env from .env.example — fill in secrets before running."; \
+	fi
+
+# ---- Run components (wired now; serve once Phase 1+ fills the modules) ---
+
+## Run model_a (ACTIVE) on :8001  [needs Phase 1]
+run-model-a:
+	cd $(MODEL_A_DIR) && venva/bin/uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+
+## Run model_b (BACKUP) on :8002  [needs Phase 1]
+run-model-b:
+	cd $(MODEL_B_DIR) && venvb/bin/uvicorn app:app --host 0.0.0.0 --port 8002 --reload
+
+## Run the Django control plane on :8000  [needs Phase 4]
+run-backend:
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py runserver 0.0.0.0:8000
+
+## Run the agent loop in the foreground  [needs Phase 2]
+agent:
+	cd $(AGENT_DIR)/_files && ../venvd/bin/python agent.py
+
+## Smoke-check that schemas.py + config.py import cleanly under venvd
+verify-config:
+	cd $(AGENT_DIR)/_files && ../venvd/bin/python -c "import schemas, config; print('schemas + config import OK')"
+
+# ---- Tests (stubs until Phase 7 fills the matrix; see roadmap §6) --------
+
+## Run the full test matrix (unit + integration + e2e)
+test: test-unit test-int test-e2e
+
+test-unit:
+	@echo "test-unit: no tests yet — added incrementally from Phase 2 (roadmap §6)."
+
+test-int:
+	@echo "test-int: no tests yet — added from Phase 2/4 (roadmap §6)."
+
+test-e2e:
+	@echo "test-e2e: no tests yet — one per failure_scenarios.md scenario (Phase 7)."
+
+# ---- Cleanup ------------------------------------------------------------
+
+## Remove all venvs and Python caches
+clean:
+	rm -rf $(MODEL_A_DIR)/venva $(MODEL_B_DIR)/venvb $(BACKEND_DIR)/venvc $(AGENT_DIR)/venvd
+	find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+	@echo "==> Cleaned venvs and __pycache__."
