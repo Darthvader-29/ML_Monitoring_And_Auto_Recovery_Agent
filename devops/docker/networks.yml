@@ -1,0 +1,6 @@
+# Shared user-defined bridge network (deployment_and_devops.md §3.1).
+# A user-defined bridge gives automatic DNS by service name (http://backend:8000).
+networks:
+  mlmon_net:
+    name: mlmon_net
+    driver: bridge

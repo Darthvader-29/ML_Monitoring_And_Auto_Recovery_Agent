@@ -36,12 +36,21 @@ def execute(decision: Decision, runtime, django_client=None) -> ActionResult:
             executed=False, outcome=Outcome.SKIPPED, message="target already active",
         )
 
+    build_number = build_url = None
     if config.settings.executor_type == "jenkins":
-        # Phase 5 wires clients/jenkins_client.py here behind this same interface.
-        log.warning("jenkins executor not yet implemented; falling back to direct flip")
+        # Jenkins executor (Phase 5): delegate the mutation to the recovery job.
+        # Same interface as direct; on Jenkins failure we do NOT flip and report it,
+        # so the decision engine can escalate rather than leave a half-switch.
+        ok, build_number, build_url = _run_via_jenkins(target, decision.reason)
+        if not ok:
+            return ActionResult(
+                action=ActionType.SWITCH_BACKUP, target_model=target,
+                executed=False, outcome=Outcome.FAILED,
+                jenkins_build_number=build_number, jenkins_build_url=build_url,
+                message=f"jenkins switch to {target} failed",
+            )
 
-    # Direct executor: flip the in-memory active pointer (the source of truth until
-    # Phase 4 persists it in the Django registry).
+    # Flip the in-memory active pointer and mirror it into the Django registry.
     runtime.previous_model = previous
     runtime.active_model = target
     if django_client is not None:
@@ -51,5 +60,16 @@ def execute(decision: Decision, runtime, django_client=None) -> ActionResult:
     return ActionResult(
         action=ActionType.SWITCH_BACKUP, target_model=target,
         executed=True, outcome=Outcome.PENDING,
+        jenkins_build_number=build_number, jenkins_build_url=build_url,
         message=f"switched {previous} -> {target}",
     )
+
+
+def _run_via_jenkins(target: str, reason: str):
+    """Trigger the switch_active_model Jenkins job; return (ok, build_no, build_url)."""
+    from clients.jenkins_client import JenkinsClient
+    job = config.settings.jenkins_job_switch
+    result = JenkinsClient().run_job(job, {
+        "TARGET_MODEL": target, "ACTION": "switch", "REASON": reason})
+    log.warning("jenkins %s: %s", job, result.message)
+    return result.success, result.build_number, result.build_url

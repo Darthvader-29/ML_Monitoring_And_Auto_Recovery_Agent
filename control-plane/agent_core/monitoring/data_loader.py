@@ -8,6 +8,7 @@ ships beside each model service; later phases swap in the scripted live stream
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 # 8-feature Transaction Risk Scoring schema (data_simulation.md §2.1).
@@ -16,8 +17,9 @@ NUMERIC_COLS = ["amount", "account_age_days", "num_txn_24h",
 CATEGORICAL_COLS = ["country", "channel"]
 FEATURE_COLS = NUMERIC_COLS + CATEGORICAL_COLS
 
-# Each model service ships its own sample (identical content).
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Repo root: AGENT_DATA_ROOT override (used when the agent runs in a container with
+# the repo data mounted, deployment_and_devops.md §3), else inferred from this file.
+_REPO_ROOT = Path(os.environ.get("AGENT_DATA_ROOT") or Path(__file__).resolve().parents[3])
 _DEFAULT_SAMPLE = (_REPO_ROOT / "model-services" / "model_a" / "sample_input.csv")
 _DRIFT_SAMPLE = (_REPO_ROOT / "model-services" / "model_a" / "sample_input_drift.csv")
 # Larger varied batches (>=200 rows) for the drift detector (detection_methods.md §4.1).

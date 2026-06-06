@@ -1,0 +1,54 @@
+// devops/jenkins/Jenkinsfile — declarative skeleton shared by the recovery jobs
+// (deployment_and_devops.md §6.2). The agent triggers this via buildWithParameters;
+// every run audits its outcome back to the Django actions_app.
+@Library('mlmon') _   // loads devops/jenkins/jobs/*.groovy as a shared library
+
+pipeline {
+  agent any
+  parameters {
+    choice(name: 'ACTION',         choices: ['deploy', 'switch', 'rollback'])
+    string(name: 'TARGET_MODEL',   defaultValue: 'model_b')   // model_a | model_b
+    string(name: 'VERSION',        defaultValue: 'latest')
+    string(name: 'REASON',         defaultValue: '')
+    string(name: 'CORRELATION_ID', defaultValue: '')          // ties back to the agent cycle
+  }
+  options { timestamps(); disableConcurrentBuilds() }          // idempotency aid
+  environment {
+    BACKEND_URL = "${env.BACKEND_URL ?: 'http://backend:8000'}"
+  }
+  stages {
+    stage('Validate') {
+      steps { echo "ACTION=${params.ACTION} TARGET=${params.TARGET_MODEL} VERSION=${params.VERSION}" }
+    }
+    stage('Execute') {
+      steps {
+        script {
+          switch (params.ACTION) {
+            case 'deploy':   deploy_model(params.TARGET_MODEL, params.VERSION); break
+            case 'switch':   switch_active_model(params.TARGET_MODEL); break
+            case 'rollback': rollback_model(params.TARGET_MODEL); break
+            default: error("unknown ACTION ${params.ACTION}")
+          }
+        }
+      }
+    }
+    stage('Verify') {
+      steps {
+        script {
+          def port = (params.TARGET_MODEL == 'model_a') ? '8001' : '8002'
+          sh "until curl -sf http://${params.TARGET_MODEL}:${port}/health; do sleep 2; done"
+        }
+      }
+    }
+  }
+  post {
+    always {
+      // Audit the outcome back to the control plane (api_contracts.md §B.3).
+      sh """curl -s -X POST ${env.BACKEND_URL}/api/actions \
+              -H 'Content-Type: application/json' \
+              -d '{"action":"${params.ACTION}","severity":"HIGH","target_model":"${params.TARGET_MODEL}",
+                   "reason":"jenkins:${params.REASON}","outcome":"${currentBuild.currentResult == 'SUCCESS' ? 'success' : 'failed'}",
+                   "jenkins_build_id":"${env.JOB_NAME}#${env.BUILD_NUMBER}"}' || true"""
+    }
+  }
+}
