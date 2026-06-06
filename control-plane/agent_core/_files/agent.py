@@ -113,8 +113,12 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
         })
     # Drift uses a large varied batch (>=200 rows), decoupled from the small
     # prediction sample above (detection_methods.md §4.1).
-    detections += drift_det.evaluate_data_drift(
+    drift_dets = drift_det.evaluate_data_drift(
         data_loader.load_batch(drift=runtime.inject_drift))
+    detections += drift_dets
+    drift_agg = next((d for d in drift_dets if d.metric == "data_drift_aggregate"), None)
+    drift_score = drift_agg.score if drift_agg else 0.0
+    drifted_count = len([d for d in drift_dets if d.metric == "data_drift_psi"])
 
     # ---- DECIDE (severity + anti-flap gating) ----
     from decision_engine import severity_classifier
@@ -140,7 +144,9 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
         result = alert.execute(decision)
     else:
         result = no_op.execute(decision)
-    dj.post_metrics(metrics) if metrics else None
+    if metrics:
+        dj.post_metrics(metrics, overall_drift_score=drift_score,
+                        drifted_feature_count=drifted_count)
     action_id = dj.post_action(decision, result)
 
     # ---- VERIFY (only after a real switch) ----

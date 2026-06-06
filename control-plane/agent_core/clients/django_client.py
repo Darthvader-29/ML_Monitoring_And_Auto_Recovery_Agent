@@ -30,7 +30,7 @@ class NullDjangoClient:
 
     enabled = False
 
-    def post_metrics(self, snapshot: MetricSnapshot) -> None:
+    def post_metrics(self, snapshot: MetricSnapshot, **_kw) -> None:
         log.debug("post_metrics (null): %s err=%.3f", snapshot.model_name, snapshot.error_rate)
 
     def get_active_model(self) -> Optional[str]:
@@ -68,7 +68,8 @@ class DjangoClient:
             log.warning("POST %s failed: %s", path, exc)
         return None
 
-    def post_metrics(self, snapshot: MetricSnapshot) -> None:
+    def post_metrics(self, snapshot: MetricSnapshot, *, overall_drift_score: float = 0.0,
+                     drifted_feature_count: int = 0) -> None:
         self._post("/api/metrics", {
             "model_name": snapshot.model_name,
             "model_version": snapshot.model_version,
@@ -80,6 +81,8 @@ class DjangoClient:
             "avg_confidence": snapshot.avg_confidence,
             "accuracy": snapshot.accuracy,
             "status": snapshot.status.value,
+            "overall_drift_score": overall_drift_score,
+            "drifted_feature_count": drifted_feature_count,
             "timestamp": snapshot.timestamp.isoformat(),
         })
 

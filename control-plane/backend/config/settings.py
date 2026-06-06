@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "registry_app",
     "monitoring_app",
     "actions_app",
+    "dashboard_app",
 ]
 
 MIDDLEWARE = [
