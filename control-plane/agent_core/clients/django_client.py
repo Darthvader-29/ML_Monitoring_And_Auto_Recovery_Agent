@@ -12,6 +12,7 @@ in Phases 2-3).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -87,13 +88,18 @@ class DjangoClient:
         })
 
     def get_active_model(self) -> Optional[str]:
-        try:
-            r = requests.get(f"{self._base}/api/active-model",
-                             headers=self._headers, timeout=_TIMEOUT)
-            if r.status_code == 200:
-                return r.json().get("model_name")
-        except (requests.RequestException, ValueError) as exc:
-            log.warning("get_active_model failed: %s", exc)
+        # Idempotent GET: up to 3 attempts with exponential backoff
+        # (0.25s, 0.5s) per api_contracts.md §Timeouts.
+        for attempt in range(3):
+            try:
+                r = requests.get(f"{self._base}/api/active-model",
+                                 headers=self._headers, timeout=_TIMEOUT)
+                if r.status_code == 200:
+                    return r.json().get("model_name")
+            except (requests.RequestException, ValueError) as exc:
+                log.warning("get_active_model attempt %d failed: %s", attempt + 1, exc)
+            if attempt < 2:
+                time.sleep(0.25 * (2 ** attempt))
         return None
 
     def set_active_model(self, model_name: str, reason: str = "") -> None:

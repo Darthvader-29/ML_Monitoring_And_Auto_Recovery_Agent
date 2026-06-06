@@ -129,19 +129,24 @@ demo:
 verify-config:
 	cd $(AGENT_DIR)/_files && ../venvd/bin/python -c "import schemas, config; print('schemas + config import OK')"
 
-# ---- Tests (stubs until Phase 7 fills the matrix; see roadmap §6) --------
+# ---- Tests (roadmap §6) --------------------------------------------------
 
-## Run the full test matrix (unit + integration + e2e)
-test: test-unit test-int test-e2e
+## Run the full test matrix (agent unit + e2e scenarios + backend)
+test: test-unit test-e2e
 
+## Unit tests: agent detectors/decision/verify + Django backend apps
 test-unit:
-	@echo "test-unit: no tests yet — added incrementally from Phase 2 (roadmap §6)."
+	cd $(AGENT_DIR) && venvd/bin/python -m pytest tests/test_detectors.py \
+	  tests/test_decision_engine.py tests/test_verification.py -q
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py test -v1
 
-test-int:
-	@echo "test-int: no tests yet — added from Phase 2/4 (roadmap §6)."
-
+## E2E scenario tests (failure_scenarios.md cases through the loop)
 test-e2e:
-	@echo "test-e2e: no tests yet — one per failure_scenarios.md scenario (Phase 7)."
+	cd $(AGENT_DIR) && venvd/bin/python -m pytest tests/test_loop_scenarios.py -q
+
+## Integration (agent <-> live stack) is exercised by `make demo`
+test-int:
+	@echo "test-int: run 'make demo' for the live agent<->services<->backend loop."
 
 # ---- Cleanup ------------------------------------------------------------
 
