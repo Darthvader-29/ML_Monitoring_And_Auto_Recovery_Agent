@@ -17,8 +17,13 @@ AGENT_DIR   := control-plane/agent_core
 
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
-        env run-model-a run-model-b run-backend agent verify-config \
+        env data generate-data train-models sample-input \
+        run-model-a run-model-b run-backend agent verify-config \
         test test-unit test-int test-e2e clean
+
+# data_sim scripts run under venva (has sklearn/pandas/numpy/joblib) and import
+# their sibling `common` module, so they execute from the data_sim/ directory.
+VENVA_PY := $(abspath $(MODEL_A_DIR)/venva/bin/python)
 
 ## Show this help (default)
 help:
@@ -66,6 +71,24 @@ env:
 	  cp .env.example .env && \
 	  echo "Created .env from .env.example — fill in secrets before running."; \
 	fi
+
+# ---- Data & models (Phase 1; needs venva — run `make setup-model-a`) ----
+
+## Generate reference data, train both models, and refresh sample inputs
+data: generate-data train-models sample-input
+	@echo "==> Data + models ready (model.pkl, sample_input.csv in each service)."
+
+## Generate the frozen 20k reference dataset (data_sim/artifacts/reference.csv)
+generate-data:
+	cd data_sim && $(VENVA_PY) generate_reference.py
+
+## Train model_a (GradientBoosting) + model_b (LogisticRegression) -> model.pkl
+train-models:
+	cd data_sim && $(VENVA_PY) train_models.py
+
+## Refresh committed sample_input.csv (+ drift variant) in both services
+sample-input:
+	cd data_sim && $(VENVA_PY) make_sample_input.py
 
 # ---- Run components (wired now; serve once Phase 1+ fills the modules) ---
 
