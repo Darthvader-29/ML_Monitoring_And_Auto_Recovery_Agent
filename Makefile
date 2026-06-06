@@ -18,7 +18,7 @@ AGENT_DIR   := control-plane/agent_core
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
         env data generate-data train-models sample-input \
-        run-model-a run-model-b run-backend agent verify-config \
+        run-model-a run-model-b run-backend agent demo verify-config \
         test test-unit test-int test-e2e clean
 
 # data_sim scripts run under venva (has sklearn/pandas/numpy/joblib) and import
@@ -104,9 +104,13 @@ run-model-b:
 run-backend:
 	cd $(BACKEND_DIR) && venvc/bin/python manage.py runserver 0.0.0.0:8000
 
-## Run the agent loop in the foreground  [needs Phase 2]
+## Run the agent loop in the foreground (e.g. make agent ARGS="--ticks 6")
 agent:
-	cd $(AGENT_DIR)/_files && ../venvd/bin/python agent.py
+	cd $(AGENT_DIR) && venvd/bin/python _files/agent.py $(ARGS)
+
+## MVP demo: faulty model_a -> agent detects, switches to model_b, verifies
+demo:
+	bash scripts/demo_mvp.sh
 
 ## Smoke-check that schemas.py + config.py import cleanly under venvd
 verify-config:
