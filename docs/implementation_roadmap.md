@@ -101,7 +101,7 @@ Phases are cumulative. Each lists: **Objective**, **Exit criteria**, **Tasks →
 - **Tasks → files:**
   - `agent_core/monitoring/model_probe.py`, `prediction_probe.py`, `data_loader.py`: pull `/health` and `/metrics`, feed `sample_input.csv` to `/predict`.
   - `agent_core/detection/threshold_detector.py`: simplest detector only (per `detection_methods.md`). Anomaly/drift stubs return "no signal" for now.
-  - `agent_core/decision_engine/severity_classifier.py`, `policy_rules.py`, `decision.py`: minimal rule — breach ⇒ severity ⇒ `switch_model` decision.
+  - `agent_core/decision_engine/severity_classifier.py`, `policy_rules.py`, `decision.py`: minimal rule — breach ⇒ severity ⇒ `switch_to_backup` decision.
   - `agent_core/actions/switch_model.py`, `no_op.py`, `alert.py`: `switch_model` calls the active-model flip directly (for now, target a local stub or the Phase 4 endpoint contract — start with `no_op`/`alert` working and `switch_model` hitting a simple in-memory flag).
   - `agent_core/verification/health_check.py`, `rollback_guard.py`: confirm new active model `/health`; if not healthy, `rollback_guard` reverts.
   - `agent_core/_files/agent.py`: the loop wiring Observe→Detect→Decide→Act→Verify per `agent_logic.md`.
@@ -130,7 +130,7 @@ Phases are cumulative. Each lists: **Objective**, **Exit criteria**, **Tasks →
 ### Phase 4 — Control Plane & Persistence (Django)
 
 - **Objective:** Replace in-memory state with the Django+DRF backend: metrics ingestion, model registry/active flag, persistent audit log.
-- **Exit criteria — done when:** the agent reads active model from `registry_app`, posts metrics to `monitoring_app`, writes every action to `actions_app`, and the `switch_model` action flips the active flag via `POST /api/active-model`.
+- **Exit criteria — done when:** the agent reads active model from `registry_app`, posts metrics to `monitoring_app`, writes every action to `actions_app`, and the `switch_to_backup` action flips the active flag via `POST /api/active-model`.
 - **Tasks → files:**
   - `backend/config/settings.py`, `config/urls.py`, `config/wsgi.py`, `_files/manage.py`: working Django project (port 8000, `venvc`).
   - `monitoring_app/models.py`, `serializers.py`, `views.py`, `urls.py`: `/api/metrics` ingest/query per `data_model.md` + `api_contracts.md`.
@@ -147,7 +147,7 @@ Phases are cumulative. Each lists: **Objective**, **Exit criteria**, **Tasks →
 ### Phase 5 — Recovery via Jenkins + Docker (swappable execution backend)
 
 - **Objective:** Swap the direct-API switch for **Jenkins-triggered recovery jobs**, and package components in Docker — **without breaking the loop.**
-- **Exit criteria — done when:** `switch_model`/rollback go through `jenkins_client.py` triggering Jenkins jobs, and the full stack runs under `docker-compose`. The direct-API executor remains available as a fallback.
+- **Exit criteria — done when:** `switch_to_backup`/rollback go through `jenkins_client.py` triggering Jenkins jobs, and the full stack runs under `docker-compose`. The direct-API executor remains available as a fallback.
 - **Tasks → files:**
   - `devops/jenkins/jobs/deploy_model.groovy`, `switch_active_model.groovy`, `rollback_model.groovy` + `devops/jenkins/_files/Jenkinsfile`: implement the recovery jobs per `deployment_and_devops.md`.
   - `agent_core/clients/jenkins_client.py`: trigger jobs, poll build status.
@@ -230,7 +230,7 @@ How the **required deliverables** and the **loop stages** map onto the phases.
 - **One** monitored model (`model_a`, port 8001) plus `model_b` (port 8002) as the failover target.
 - **Observe:** agent polls `model_a` `/health` and `/metrics` and runs `sample_input.csv` through `/predict`.
 - **Detect:** **threshold detection only** (`threshold_detector.py`) — e.g. accuracy/confidence below a configured floor or error rate above a ceiling.
-- **Decide:** minimal `policy_rules.py` → breach maps to a `switch_model` decision.
+- **Decide:** minimal `policy_rules.py` → breach maps to a `switch_to_backup` decision.
 - **Act:** `switch_model.py` flips the active model **via a direct API call / in-memory flag — NOT via Jenkins.**
 - **Verify:** `health_check.py` confirms `model_b` is healthy as the new active; `rollback_guard.py` reverts if not.
 - **Log:** the episode is written to stdout / a local log line (full persistent audit comes in Phase 4).

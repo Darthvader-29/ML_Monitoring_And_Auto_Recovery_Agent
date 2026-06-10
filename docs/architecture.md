@@ -547,7 +547,7 @@ sequenceDiagram
     L->>DEC: severity_classifier.classify(findings)
     DEC-->>L: severity = HIGH
     L->>DEC: policy_rules.resolve(HIGH)
-    DEC-->>L: Decision{action: SWITCH_MODEL}
+    DEC-->>L: Decision{action: switch_to_backup}
 
     Note over L: ── ACT ──
     L->>DC: GET active model (pre-check / idempotency)
@@ -563,10 +563,10 @@ sequenceDiagram
     Note over L: ── VERIFY ──
     L->>VER: health_check.run()
     VER->>MB: GET /health
-    MB-->>VER: 200 {status:"ok"}
+    MB-->>VER: 200 {health_status:"HEALTHY"}
     VER->>VER: rollback_guard.evaluate()
     alt verification OK
-        VER-->>L: outcome = SUCCESS
+        VER-->>L: outcome = success
     else worse than before
         VER->>JC: trigger(rollback_model)
         JC->>JK: POST /job/rollback_model
@@ -600,12 +600,12 @@ sequenceDiagram
 
 **Model metrics (`GET /metrics` on :8001):**
 ```json
-{ "latency_ms_p95": 42.0, "error_rate": 0.001, "request_count": 10423, "status": "ok" }
+{ "latency_ms_p95": 42.0, "error_rate": 0.001, "request_count": 10423, "health_status": "HEALTHY" }
 ```
 
 **Agent → Django (`POST /api/metrics` on :8000):**
 ```json
-{ "model_name": "model_a", "latency_ms": 42.0, "error_rate": 0.001, "status": "ok", "ts": "2026-05-30T12:00:00Z" }
+{ "model_name": "model_a", "latency_ms": 42.0, "error_rate": 0.001, "health_status": "HEALTHY", "ts": "2026-05-30T12:00:00Z" }
 ```
 
 **Active model (`GET /api/active-model` on :8000):**
@@ -615,7 +615,7 @@ sequenceDiagram
 
 **Agent → `actions_app` audit record:**
 ```json
-{ "action": "SWITCH_MODEL", "severity": "HIGH", "outcome": "SUCCESS", "from": "model_a", "to": "model_b" }
+{ "action": "switch_to_backup", "severity": "HIGH", "outcome": "success", "from": "model_a", "to": "model_b" }
 ```
 
 ---
@@ -668,7 +668,7 @@ decision live in **`monitoring_app`**. Together they give a complete, replayable
 
 Each action has an inverse:
 
-- `switch_model` (A→B) is reversed by another switch (B→A).
+- `switch_to_backup` (A→B) is reversed by another switch (B→A).
 - `rollback_model` restores a prior `version` from the registry.
 - "disable predictions" is reversed by re-enabling the `active_flag`.
 

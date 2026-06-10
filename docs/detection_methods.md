@@ -98,6 +98,7 @@ shape below is authoritative.)
 
 ```python
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 @dataclass
@@ -108,10 +109,14 @@ class DetectionResult:
     threshold:     float          # the decision boundary used for this evaluation
     breached:      bool           # score crossed threshold in the alerting direction
     drifted_features: list[str] = field(default_factory=list)   # populated by drift only
-    severity_hint: Literal["none", "low", "medium", "high"] = "none"
+    severity_hint: Literal["NONE", "LOW", "MEDIUM", "HIGH"] = "NONE"   # Severity values
     evidence:      dict[str, Any] = field(default_factory=dict)  # method-specific metadata
-    timestamp:     str = ""        # ISO-8601 UTC of the evaluation
+    timestamp:     datetime = None  # ISO-8601 UTC of the evaluation
 ```
+
+> The canonical form of this schema is the pydantic `BaseModel` in `conventions.md` (§2), where
+> `timestamp` is a `datetime`. Canonical schemas/enums/defaults live in `conventions.md`
+> (authoritative).
 
 **`signal_type` vocabulary** (stable string keys downstream policies match on):
 
@@ -131,7 +136,7 @@ Conventions:
 - `drifted_features` is empty for `threshold` and `anomaly`; for per-feature drift it holds the
   single feature, and for the aggregate drift result it holds **all** drifted features.
 
-A non-breaching evaluation may still be emitted (`breached=False`, `severity_hint="none"`) so the
+A non-breaching evaluation may still be emitted (`breached=False`, `severity_hint="NONE"`) so the
 control plane can log/plot the score history. Implementations may instead suppress non-breaches to
 reduce volume; either is acceptable as long as it is consistent.
 
@@ -182,11 +187,11 @@ breached(confidence) = value(confidence) <= T_confidence
 
 | Signal | Default threshold | Notes |
 |---|---|---|
-| `error_rate` | `0.05` (5 %) | fraction in `[0,1]` |
+| `error_rate` | `0.10` (10 %) | fraction in `[0,1]` |
 | `avg_latency_ms` | `300` ms | service SLA dependent |
-| `p95_latency_ms` | `800` ms | tail SLA |
-| `inference_failure_rate` | `0.02` (2 %) | invalid/failed predicts |
-| `confidence_floor` | `0.55` | mean `max(proba)`; binary classifier |
+| `p95_latency_ms` | `500` ms | tail SLA |
+| `inference_failure_rate` | `0.05` (5 %) | invalid/failed predicts |
+| `confidence_floor` | `0.60` | mean `max(proba)`; binary classifier |
 
 ### 2.4 Adaptive thresholds (rolling mean ± k·std)
 
@@ -223,7 +228,7 @@ fired(m) = consec[m] >= N_consec
 ```
 
 Default `N_consec = 3` consecutive ticks. The `DetectionResult` is emitted on every breaching tick
-(so it is logged), but `severity_hint` is only raised above `"low"` once `fired(m)` is true; the
+(so it is logged), but `severity_hint` is only raised above `"LOW"` once `fired(m)` is true; the
 count is carried in `evidence["consecutive_breaches"]`. This is the detector-local half of the
 persistence logic described in §6.
 
@@ -236,7 +241,7 @@ DetectionResult(
     score=value,                 # observed metric
     threshold=T_eff,
     breached=(value >= T_eff),
-    severity_hint=("medium" if fired else "low") if breached else "none",
+    severity_hint=("MEDIUM" if fired else "LOW") if breached else "NONE",
     evidence={
         "static_threshold": T_static, "adaptive_threshold": T_adaptive,
         "rolling_mean": mu, "rolling_std": sigma, "k": k,
@@ -369,7 +374,7 @@ DetectionResult(
     score=abs(z_r),                          # the test statistic
     threshold=k_r,
     breached=(abs(z_r) >= k_r),
-    severity_hint="low" if breached else "none",   # raised to "medium" if pattern=="sustained"
+    severity_hint="LOW" if breached else "NONE",   # raised to "MEDIUM" if pattern=="sustained"
     evidence={"metric": "avg_latency_ms", "value": x_t, "median": med, "mad": MAD,
               "method": "robust_zscore", "pattern": pattern, "window": W},
     timestamp=now_iso(),
@@ -439,9 +444,9 @@ Each summand is the **per-bin contribution**; store the top contributors in `evi
 
 | PSI(f) | Interpretation | `breached` | `severity_hint` |
 |---|---|---|---|
-| `< 0.10` | no significant drift | False | none |
-| `0.10 – 0.25` | moderate drift — monitor | True | low / medium |
-| `> 0.25` | significant drift | True | medium / high |
+| `< 0.10` | no significant drift | False | NONE |
+| `0.10 – 0.25` | moderate drift — monitor | True | LOW / MEDIUM |
+| `> 0.25` | significant drift | True | MEDIUM / HIGH |
 
 Default decision threshold `PSI_THRESHOLD = 0.25`; a secondary "watch" threshold `0.10`.
 
@@ -518,7 +523,7 @@ DetectionResult(
     detector="drift", signal_type="data_drift_psi",
     score=psi_value, threshold=0.25, breached=(psi_value > 0.25),
     drifted_features=[feature_name],
-    severity_hint="medium" if psi_value > 0.25 else ("low" if psi_value > 0.10 else "none"),
+    severity_hint="MEDIUM" if psi_value > 0.25 else ("LOW" if psi_value > 0.10 else "NONE"),
     evidence={"feature": feature_name, "bins": B, "ref_props": [...], "cur_props": [...],
               "top_bin_contributions": [...], "ks_D": D, "ks_p": p, "n_ref": N_R, "n_cur": N_C},
     timestamp=now_iso(),
@@ -532,7 +537,7 @@ DetectionResult(
     detector="drift", signal_type="data_drift_aggregate",
     score=share_drifted, threshold=0.30, breached=(share_drifted >= 0.30),
     drifted_features=drifted_features,
-    severity_hint="high" if share_drifted >= 0.5 else ("medium" if share_drifted >= 0.3 else "low"),
+    severity_hint="HIGH" if share_drifted >= 0.5 else ("MEDIUM" if share_drifted >= 0.3 else "LOW"),
     evidence={"per_feature_psi": {...}, "per_feature_ks_p": {...},
               "domain_clf_auc": auc, "n_features": len(features)},
     timestamp=now_iso(),
@@ -603,7 +608,7 @@ drift = (abs_drop >= DROP_ABS) or (rel_drop >= DROP_REL)
 the same shape for F1; for RMSE use `current_rmse >= baseline_rmse * (1 + DROP_REL)`.
 
 **Sustained requirement.** To avoid reacting to a single unlucky window, require the drop to hold for
-`N_perf_consec = 2` consecutive labeled windows before raising `severity_hint` above `"low"` (the
+`N_perf_consec = 2` consecutive labeled windows before raising `severity_hint` above `"LOW"` (the
 persistence idea of §6 applied to performance).
 
 Optional statistical confirmation: a two-proportion z-test (or McNemar on paired correct/incorrect)
@@ -629,7 +634,7 @@ These are noted as upgrades; the default implementation is the windowed performa
 DetectionResult(
     detector="drift", signal_type="concept_drift_perf",
     score=abs_drop, threshold=DROP_ABS, breached=drift,
-    severity_hint="high" if abs_drop >= 0.10 else ("medium" if drift else "none"),
+    severity_hint="HIGH" if abs_drop >= 0.10 else ("MEDIUM" if drift else "NONE"),
     evidence={"metric": "accuracy", "baseline": baseline_accuracy,
               "current": current_accuracy, "abs_drop": abs_drop, "rel_drop": rel_drop,
               "f1_current": f1, "n_labeled": W_perf, "consec": consec, "ztest_p": p},
@@ -641,10 +646,10 @@ DetectionResult(
 
 | Inputs drifted? (§4) | Performance dropped? (§5) | Interpretation | Typical hint |
 |---|---|---|---|
-| No | No | Healthy — no action | none |
-| **Yes** | No | **Data drift only** — covariate shift the model tolerates; watch, may pre-empt | low / medium |
-| No | **Yes** | **Concept drift** — `P(y\|x)` changed; inputs look normal; needs retrain/switch | medium / high |
-| **Yes** | **Yes** | **Combined drift** — strongest signal; input shift is hurting the model | high |
+| No | No | Healthy — no action | NONE |
+| **Yes** | No | **Data drift only** — covariate shift the model tolerates; watch, may pre-empt | LOW / MEDIUM |
+| No | **Yes** | **Concept drift** — `P(y\|x)` changed; inputs look normal; needs retrain/switch | MEDIUM / HIGH |
+| **Yes** | **Yes** | **Combined drift** — strongest signal; input shift is hurting the model | HIGH |
 
 This matrix is computed by the orchestrator from the two drift signals and attached as
 `evidence["drift_diagnosis"]` on the aggregate result. The **action** taken from each cell is decided
@@ -678,7 +683,7 @@ only a **hint ordering** — the authoritative severity→action policy lives in
 
 Every breaching `signal_type` has a counter incremented on breach and reset to 0 on a clean tick
 (threshold §2.5, anomaly §3.8, concept §5.2). A signal is **persistent** once its counter reaches the
-signal's `N_consec`/`N_sustain`; only then is `severity_hint` allowed above `"low"`. Counters live in
+signal's `N_consec`/`N_sustain`; only then is `severity_hint` allowed above `"LOW"`. Counters live in
 the agent's `state` and are surfaced in each result's `evidence`:
 
 ```python
@@ -688,7 +693,7 @@ def apply_persistence(results, state):
         state.counters[key] = state.counters.get(key, 0) + 1 if r.breached else 0
         r.evidence["persistence_count"] = state.counters[key]
         if not r.breached or state.counters[key] < state.min_persist(key):
-            r.severity_hint = "low" if r.breached else "none"   # cap until persistent
+            r.severity_hint = "LOW" if r.breached else "NONE"   # cap until persistent
     return results
 ```
 
@@ -701,11 +706,11 @@ see `agent_logic.md`.
 
 | Group | Parameter | Default | Meaning / where used |
 |---|---|---|---|
-| Threshold | `error_rate` | `0.05` | static error-rate ceiling (§2.3) |
+| Threshold | `error_rate` | `0.10` | static error-rate ceiling (§2.3) |
 | Threshold | `avg_latency_ms` | `300` | static avg latency ceiling |
-| Threshold | `p95_latency_ms` | `800` | static tail latency ceiling |
-| Threshold | `inference_failure_rate` | `0.02` | static failed-predict ceiling |
-| Threshold | `confidence_floor` | `0.55` | min mean confidence (lower-worse) |
+| Threshold | `p95_latency_ms` | `500` | static tail latency ceiling |
+| Threshold | `inference_failure_rate` | `0.05` | static failed-predict ceiling |
+| Threshold | `confidence_floor` | `0.60` | min mean confidence (lower-worse) |
 | Threshold | adaptive `k` | `3.0` | rolling mean ± k·std band (§2.4) |
 | Threshold | window `W` | `30` | ticks in adaptive buffer |
 | Threshold | `W_min` | `10` | min samples before adaptive trusted |
@@ -742,6 +747,7 @@ see `agent_logic.md`.
 | Combine | `min_persist` (sustained/concept) | `2` | persistence before hint > low |
 
 All values are defaults; override in `control-plane/agent_core/config.py` per model and SLA.
+Canonical schemas/enums/defaults live in `conventions.md` (authoritative).
 
 ---
 
@@ -769,7 +775,7 @@ Bin edges fixed from the reference quantiles (each reference bin ≈ 10 %). Obse
 0.00446 + 0.01070 ≈ 0.0669`.
 
 **Interpretation:** `PSI ≈ 0.067 < 0.10` → **no significant drift**. `breached = False`,
-`severity_hint = "none"`. The largest single contributor is bin 1 (mass leaving the lowest bin) —
+`severity_hint = "NONE"`. The largest single contributor is bin 1 (mass leaving the lowest bin) —
 recorded in `evidence["top_bin_contributions"]`. (If the same shape were exaggerated until
 `PSI > 0.25`, the feature would flag as significant drift.)
 
