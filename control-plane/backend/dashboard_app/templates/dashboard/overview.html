@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="{{ refresh_seconds }}">
+  <title>ML Monitoring & Auto-Recovery</title>
+  <style>
+    :root { --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --muted:#57606a; --bg:#f6f8fa; --card:#fff; --line:#d0d7de; }
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin:0; background:var(--bg); color:#1f2328; }
+    header { background:#24292f; color:#fff; padding:14px 24px; display:flex; justify-content:space-between; align-items:center; }
+    header h1 { font-size:18px; margin:0; font-weight:600; }
+    header .sub { color:#b1bac4; font-size:13px; }
+    main { padding:24px; max-width:1100px; margin:0 auto; }
+    h2 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:28px 0 12px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+    .card h3 { margin:0 0 10px; font-size:16px; display:flex; justify-content:space-between; align-items:center; }
+    .badge { font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; color:#fff; text-transform:uppercase; }
+    .ok{background:var(--ok)} .warn{background:var(--warn)} .bad{background:var(--bad)} .muted{background:var(--muted)}
+    .pill { display:inline-block; font-size:11px; padding:2px 7px; border-radius:4px; border:1px solid var(--line); color:var(--muted); }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    th,td { text-align:left; padding:8px 12px; font-size:13px; border-bottom:1px solid var(--line); }
+    th { background:#f6f8fa; color:var(--muted); font-weight:600; }
+    tr:last-child td { border-bottom:none; }
+    .metric { display:flex; justify-content:space-between; padding:4px 0; font-size:13px; border-bottom:1px dashed #eaeef2; }
+    .metric span:first-child { color:var(--muted); }
+    .active-tag { background:var(--ok); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ML Monitoring &amp; Auto-Recovery Agent</h1>
+    <div class="sub">
+      {% if active %}ACTIVE: <b>{{ active.model.model_name }}</b>@{{ active.version }}
+      &middot; switched {{ switched_at|default:"—" }} by {{ switched_by }}{% else %}no active model{% endif %}
+      &middot; open incidents: {{ open_incidents }} &middot; auto-refresh {{ refresh_seconds }}s
+    </div>
+  </header>
+  <main>
+
+    <!-- PANE 1 + 2: model health + drift indicators -->
+    <h2>Model health &amp; drift</h2>
+    <div class="cards">
+      {% for c in cards %}
+      <div class="card">
+        <h3>
+          {{ c.name }}
+          {% if c.active %}<span class="badge active-tag">active</span>{% endif %}
+          {% if c.snap %}
+            {% if c.snap.health_status == "HEALTHY" %}<span class="badge ok">healthy</span>
+            {% elif c.snap.health_status == "DEGRADED" %}<span class="badge warn">degraded</span>
+            {% elif c.snap.health_status == "UNKNOWN" %}<span class="badge muted">unknown</span>
+            {% else %}<span class="badge bad">{{ c.snap.health_status|lower }}</span>{% endif %}
+          {% else %}<span class="badge muted">no data</span>{% endif %}
+        </h3>
+        {% if c.snap %}
+          <div class="metric"><span>error rate</span><span>{{ c.snap.error_rate|floatformat:3 }}</span></div>
+          <div class="metric"><span>p95 latency</span><span>{{ c.snap.p95_latency_ms|floatformat:1 }} ms</span></div>
+          <div class="metric"><span>avg confidence</span><span>{{ c.snap.avg_confidence|floatformat:3|default:"—" }}</span></div>
+          <div class="metric"><span>accuracy</span><span>{{ c.snap.accuracy|floatformat:3|default:"—" }}</span></div>
+          <div class="metric">
+            <span>drift score</span>
+            <span>
+              {% if c.snap.overall_drift_score >= 0.3 %}<span class="badge bad">{{ c.snap.overall_drift_score|floatformat:2 }}</span>
+              {% elif c.snap.overall_drift_score >= 0.1 %}<span class="badge warn">{{ c.snap.overall_drift_score|floatformat:2 }}</span>
+              {% else %}<span class="badge ok">{{ c.snap.overall_drift_score|floatformat:2 }}</span>{% endif %}
+              <span class="pill">{{ c.snap.drifted_feature_count }} feat</span>
+            </span>
+          </div>
+          <div class="metric"><span>observed</span><span>{{ c.snap.timestamp }}</span></div>
+        {% else %}
+          <p style="color:var(--muted);font-size:13px;">No snapshots yet — start the agent.</p>
+        {% endif %}
+      </div>
+      {% empty %}
+      <div class="card"><p>No models registered. Run <code>make backend-init</code>.</p></div>
+      {% endfor %}
+    </div>
+
+    <!-- PANE 3: action history / audit timeline -->
+    <h2>Action history (agent audit trail)</h2>
+    <table>
+      <thead><tr><th>time</th><th>action</th><th>severity</th><th>target</th><th>outcome</th><th>reason</th></tr></thead>
+      <tbody>
+        {% for a in actions %}
+        <tr>
+          <td>{{ a.decided_at|date:"H:i:s" }}</td>
+          <td><b>{{ a.action }}</b></td>
+          <td>
+            {% if a.severity == "HIGH" or a.severity == "CRITICAL" %}<span class="badge bad">{{ a.severity }}</span>
+            {% elif a.severity == "MEDIUM" %}<span class="badge warn">{{ a.severity }}</span>
+            {% else %}<span class="badge muted">{{ a.severity }}</span>{% endif %}
+          </td>
+          <td>{{ a.model_version.model.model_name }}</td>
+          <td>
+            {% if a.outcome == "SUCCESS" %}<span class="badge ok">success</span>
+            {% elif a.outcome == "FAILED" or a.outcome == "REVERTED" %}<span class="badge bad">{{ a.outcome|lower }}</span>
+            {% else %}<span class="badge muted">{{ a.outcome|lower }}</span>{% endif %}
+          </td>
+          <td style="max-width:420px;">{{ a.reason|truncatechars:90 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" style="color:var(--muted);">No actions recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  </main>
+</body>
+</html>

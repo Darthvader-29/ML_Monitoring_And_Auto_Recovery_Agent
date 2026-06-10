@@ -1,0 +1,3 @@
+venvd/
+**/__pycache__/
+*.log

@@ -1,0 +1,129 @@
+# Full stack (deployment_and_devops.md §3). Paths are relative to this file, so
+# build contexts climb to the service directories with ../../.
+#
+#   docker compose -f devops/docker/docker-compose.yml up -d
+#
+# Secrets/overrides come from the repo-root .env (optional); the service-name URLs
+# and executor mode are set inline so the stack is self-contained.
+
+include:
+  - networks.yml
+
+services:
+
+  # ---------------------------------------------------------------- backend
+  backend:
+    build:
+      context: ../../control-plane/backend
+      dockerfile: _files/Dockerfile
+    image: mlmon/backend:latest
+    container_name: backend
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1
+      DJANGO_DB_NAME: /app/data/db.sqlite3
+    volumes:
+      - db_data:/app/data
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py seed_demo &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/api/health/').status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks: [mlmon_net]
+
+  # ---------------------------------------------------------------- model_a (ACTIVE)
+  model_a:
+    build:
+      context: ../../model-services/model_a
+      dockerfile: Dockerfile
+    image: mlmon/model_a:latest
+    container_name: model_a
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks: [mlmon_net]
+
+  # ---------------------------------------------------------------- model_b (BACKUP)
+  model_b:
+    build:
+      context: ../../model-services/model_b
+      dockerfile: Dockerfile
+    image: mlmon/model_b:latest
+    container_name: model_b
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks: [mlmon_net]
+
+  # ---------------------------------------------------------------- jenkins (RECOVERY EXECUTOR)
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    env_file:
+      - path: ../../.env
+        required: false
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks: [mlmon_net]
+
+  # ---------------------------------------------------------------- agent_core (THE AGENT)
+  agent_core:
+    build:
+      context: ../../control-plane/agent_core
+      dockerfile: _files/Dockerfile
+    image: mlmon/agent_core:latest
+    container_name: agent_core
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      MODEL_A_URL: http://model_a:8001
+      MODEL_B_URL: http://model_b:8002
+      BACKEND_URL: http://backend:8000
+      JENKINS_URL: http://jenkins:8080
+      AGENT_EXECUTOR_TYPE: direct          # set to "jenkins" to route via Jenkins
+      AGENT_DATA_ROOT: /repo               # sample inputs + drift fixtures (read-only mount)
+    volumes:
+      - ../../model-services:/repo/model-services:ro
+      - ../../data_sim:/repo/data_sim:ro
+    depends_on:
+      backend: {condition: service_healthy}
+      model_a: {condition: service_healthy}
+      model_b: {condition: service_healthy}
+      jenkins: {condition: service_started}
+    restart: unless-stopped
+    networks: [mlmon_net]
+
+volumes:
+  db_data:
+  jenkins_home:

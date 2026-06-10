@@ -17,8 +17,13 @@ AGENT_DIR   := control-plane/agent_core
 
 .DEFAULT_GOAL := help
 .PHONY: help setup setup-model-a setup-model-b setup-backend setup-agent \
-        env run-model-a run-model-b run-backend agent verify-config \
+        env data generate-data train-models sample-input live-batch reference-summary \
+        run-model-a run-model-b backend-init run-backend agent demo verify-config \
         test test-unit test-int test-e2e clean
+
+# data_sim scripts run under venva (has sklearn/pandas/numpy/joblib) and import
+# their sibling `common` module, so they execute from the data_sim/ directory.
+VENVA_PY := $(abspath $(MODEL_A_DIR)/venva/bin/python)
 
 ## Show this help (default)
 help:
@@ -67,6 +72,32 @@ env:
 	  echo "Created .env from .env.example — fill in secrets before running."; \
 	fi
 
+# ---- Data & models (Phase 1; needs venva — run `make setup-model-a`) ----
+
+## Generate reference data, train models, sample inputs, and drift reference
+data: generate-data train-models sample-input live-batch reference-summary
+	@echo "==> Data + models ready (model.pkl, sample_input.csv, reference_window.json)."
+
+## Generate the frozen 20k reference dataset (data_sim/artifacts/reference.csv)
+generate-data:
+	cd data_sim && $(VENVA_PY) generate_reference.py
+
+## Train model_a (GradientBoosting) + model_b (LogisticRegression) -> model.pkl
+train-models:
+	cd data_sim && $(VENVA_PY) train_models.py
+
+## Refresh committed sample_input.csv (+ drift variant) in both services
+sample-input:
+	cd data_sim && $(VENVA_PY) make_sample_input.py
+
+## Generate committed live-batch fixtures (data_sim/fixtures/*_batch.csv)
+live-batch:
+	cd data_sim && $(VENVA_PY) make_live_batch.py
+
+## Build the committed drift reference window (detection/reference_window.json)
+reference-summary:
+	cd data_sim && $(VENVA_PY) build_reference_summary.py
+
 # ---- Run components (wired now; serve once Phase 1+ fills the modules) ---
 
 ## Run model_a (ACTIVE) on :8001  [needs Phase 1]
@@ -77,31 +108,45 @@ run-model-a:
 run-model-b:
 	cd $(MODEL_B_DIR) && venvb/bin/uvicorn app:app --host 0.0.0.0 --port 8002 --reload
 
-## Run the Django control plane on :8000  [needs Phase 4]
+## Initialize the backend DB (migrate + seed registry)
+backend-init:
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py migrate --noinput
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py seed_demo
+
+## Run the Django control plane on :8000
 run-backend:
 	cd $(BACKEND_DIR) && venvc/bin/python manage.py runserver 0.0.0.0:8000
 
-## Run the agent loop in the foreground  [needs Phase 2]
+## Run the agent loop in the foreground (e.g. make agent ARGS="--ticks 6")
 agent:
-	cd $(AGENT_DIR)/_files && ../venvd/bin/python agent.py
+	cd $(AGENT_DIR) && venvd/bin/python _files/agent.py $(ARGS)
+
+## MVP demo: faulty model_a -> agent detects, switches to model_b, verifies
+demo:
+	bash scripts/demo_mvp.sh
 
 ## Smoke-check that schemas.py + config.py import cleanly under venvd
 verify-config:
 	cd $(AGENT_DIR)/_files && ../venvd/bin/python -c "import schemas, config; print('schemas + config import OK')"
 
-# ---- Tests (stubs until Phase 7 fills the matrix; see roadmap §6) --------
+# ---- Tests (roadmap §6) --------------------------------------------------
 
-## Run the full test matrix (unit + integration + e2e)
-test: test-unit test-int test-e2e
+## Run the full test matrix (agent unit + e2e scenarios + backend)
+test: test-unit test-e2e
 
+## Unit tests: agent detectors/decision/verify + Django backend apps
 test-unit:
-	@echo "test-unit: no tests yet — added incrementally from Phase 2 (roadmap §6)."
+	cd $(AGENT_DIR) && venvd/bin/python -m pytest tests/test_detectors.py \
+	  tests/test_decision_engine.py tests/test_verification.py -q
+	cd $(BACKEND_DIR) && venvc/bin/python manage.py test -v1
 
-test-int:
-	@echo "test-int: no tests yet — added from Phase 2/4 (roadmap §6)."
-
+## E2E scenario tests (failure_scenarios.md cases through the loop)
 test-e2e:
-	@echo "test-e2e: no tests yet — one per failure_scenarios.md scenario (Phase 7)."
+	cd $(AGENT_DIR) && venvd/bin/python -m pytest tests/test_loop_scenarios.py -q
+
+## Integration (agent <-> live stack) is exercised by `make demo`
+test-int:
+	@echo "test-int: run 'make demo' for the live agent<->services<->backend loop."
 
 # ---- Cleanup ------------------------------------------------------------
 
