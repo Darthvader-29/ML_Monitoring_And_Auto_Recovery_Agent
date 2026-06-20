@@ -119,6 +119,34 @@ def _fault_confidence_collapse() -> bool:
     return os.environ.get("FAULT_CONFIDENCE_COLLAPSE", "").lower() in {"1", "true", "yes"}
 
 
+def _to_native(value):
+    """Convert a numpy scalar to a native, JSON-serializable Python value."""
+    item = getattr(value, "item", None)
+    return item() if callable(item) else value
+
+
+def _derive_prediction(classes, proba) -> tuple[object, float | None]:
+    """Derive (prediction, score) from a model's classes_ and a proba row.
+
+    - ``prediction`` is the actual predicted class label (argmax of ``proba``),
+      converted to a native Python value but NOT forced to int — so integer
+      labels stay 0/1 and string labels stay strings.
+    - ``score`` is the probability of the POSITIVE class, defined as the class
+      with the largest label among ``classes`` (for [0, 1] this is class 1,
+      preserving the previous behavior; for string classes this is the
+      lexicographically largest label, e.g. 'high' over 'low'). Only genuinely
+      binary models (len(classes) == 2) get a score; otherwise it is None.
+    """
+    pred_idx = int(np.argmax(proba))
+    prediction = _to_native(classes[pred_idx])
+
+    score = None
+    if len(classes) == 2:
+        pos_idx = max(range(len(classes)), key=lambda i: classes[i])
+        score = float(proba[pos_idx])
+    return prediction, score
+
+
 # ---- Endpoints ----------------------------------------------------------
 
 @app.post("/predict")
@@ -150,8 +178,7 @@ async def predict(request: Request):
         frame = pd.DataFrame([features], columns=FEATURE_COLS)
         proba = _model.predict_proba(frame)[0]
         classes = list(_model.classes_)
-        pred_idx = int(np.argmax(proba))
-        prediction = int(classes[pred_idx])
+        prediction, score = _derive_prediction(classes, proba)
         confidence = 0.5 if _fault_confidence_collapse() else float(np.max(proba))
         probabilities = [float(p) for p in proba]
         latency_ms = (time.perf_counter() - start) * 1000.0
@@ -164,7 +191,7 @@ async def predict(request: Request):
     body = {
         "prediction": prediction,
         "confidence": round(confidence, 6),
-        "score": round(probabilities[1], 6) if len(probabilities) > 1 else None,
+        "score": round(score, 6) if score is not None else None,
         "model_name": MODEL_NAME,
         "model_version": MODEL_VERSION,
         "latency_ms": round(latency_ms, 3),
