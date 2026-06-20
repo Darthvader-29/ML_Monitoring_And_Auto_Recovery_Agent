@@ -38,3 +38,22 @@ class MetricsTests(TestCase):
         # negative -> default, no crash
         self.assertEqual(c.get("/api/metrics?limit=-5").status_code, 200)
         self.assertEqual(len(c.get("/api/metrics?limit=2").json()), 2)
+
+    def test_bad_timestamp_does_not_crash_and_falls_back(self):
+        c = Client()
+        r = c.post("/api/metrics", data=json.dumps({
+            "model_name": "model_a", "model_version": "1.0.0",
+            "timestamp": "not-a-date"}), content_type="application/json")
+        self.assertEqual(r.status_code, 201)
+        self.assertIsNotNone(MetricSnapshot.objects.first().timestamp)
+
+    def test_valid_iso_timestamp_is_stored_aware(self):
+        from django.utils import timezone as tz
+        c = Client()
+        c.post("/api/metrics", data=json.dumps({
+            "model_name": "model_a", "model_version": "1.0.0",
+            "timestamp": "2026-06-20T10:00:00+00:00"}),
+            content_type="application/json")
+        ts = MetricSnapshot.objects.first().timestamp
+        self.assertFalse(tz.is_naive(ts))
+        self.assertEqual(ts.year, 2026)

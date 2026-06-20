@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,6 +11,21 @@ from registry_app.models import Model, ModelVersion
 
 from .models import MetricSnapshot
 from .serializers import MetricSnapshotSerializer
+
+
+def _parse_timestamp(value):
+    """Parse a client-supplied timestamp safely. A missing or unparseable value
+    falls back to now(); a naive datetime is made timezone-aware (USE_TZ=True) so
+    ordering by -timestamp stays well-defined and a bad client string cannot 500
+    the ingest or make a stale row sort as 'latest'."""
+    if not value:
+        return timezone.now()
+    parsed = parse_datetime(value) if isinstance(value, str) else value
+    if parsed is None:
+        return timezone.now()
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
 
 # agent health string (healthy/degraded/unhealthy) -> DB enum
 _HEALTH_MAP = {"healthy": "HEALTHY", "degraded": "DEGRADED", "unhealthy": "UNHEALTHY"}
@@ -47,7 +63,7 @@ class MetricsView(APIView):
         mv = _resolve_version(model_name, str(d.get("model_version", "unknown")))
         snap = MetricSnapshot.objects.create(
             model_version=mv,
-            timestamp=d.get("timestamp") or timezone.now(),
+            timestamp=_parse_timestamp(d.get("timestamp")),
             request_count=int(d.get("request_count", 0)),
             error_count=int(d.get("error_count", 0)),
             error_rate=float(d.get("error_rate", 0.0)),
