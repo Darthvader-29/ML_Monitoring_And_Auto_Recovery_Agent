@@ -52,6 +52,13 @@ DATABASES = {
 # The agent authenticates with a token in production (api_contracts.md §B). For the
 # local demo we default to open access; set DJANGO_REQUIRE_AUTH=1 to require a token.
 _REQUIRE_AUTH = os.environ.get("DJANGO_REQUIRE_AUTH", "0") in ("1", "true", "True")
+
+# Data-privacy hardening (opt-in). When False, the read serializers drop internal
+# service topology (endpoint_url/port) and raw operational metric blobs
+# (before_metrics/after_metrics) from their output. Defaults to True to preserve
+# the current local demo/test behavior; set DJANGO_EXPOSE_INTERNAL=0 to harden.
+EXPOSE_INTERNAL_TOPOLOGY = os.environ.get(
+    "DJANGO_EXPOSE_INTERNAL", "1") not in ("0", "false", "False")
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated" if _REQUIRE_AUTH
