@@ -10,6 +10,7 @@ failover target.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import joblib
@@ -26,8 +27,12 @@ from common import CATEGORICAL_COLS, FEATURE_COLS, LABEL_COL, NUMERIC_COLS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_CSV = Path(__file__).resolve().parent / "artifacts" / "reference.csv"
-MODEL_A_PKL = REPO_ROOT / "model-services" / "model_a" / "model.pkl"
-MODEL_B_PKL = REPO_ROOT / "model-services" / "model_b" / "model.pkl"
+# Defaults write into each service dir (loaded at startup); overridable so the
+# trainer is not hardcoded to the model-services layout.
+MODEL_A_PKL = Path(os.environ.get(
+    "MODEL_A_PKL_OUT", REPO_ROOT / "model-services" / "model_a" / "model.pkl"))
+MODEL_B_PKL = Path(os.environ.get(
+    "MODEL_B_PKL_OUT", REPO_ROOT / "model-services" / "model_b" / "model.pkl"))
 
 
 def _preprocessor() -> ColumnTransformer:

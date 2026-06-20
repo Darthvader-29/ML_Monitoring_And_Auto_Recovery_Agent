@@ -13,6 +13,7 @@ Plus the model_a baseline accuracy/F1 for concept-drift comparison (§5.2).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,11 @@ from common import CATEGORICAL_COLS, NUMERIC_COLS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_CSV = Path(__file__).resolve().parent / "artifacts" / "reference.csv"
-OUT = REPO_ROOT / "control-plane" / "agent_core" / "detection" / "reference_window.json"
+# Default writes the committed artifact the detector reads on a fresh checkout;
+# overridable so this build step is not hardcoded to the agent_core tree.
+OUT = Path(os.environ.get(
+    "REFERENCE_WINDOW_OUT",
+    REPO_ROOT / "control-plane" / "agent_core" / "detection" / "reference_window.json"))
 
 PSI_BINS = 10
 KS_SAMPLE = 1000
