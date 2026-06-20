@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from django.db import models
+from django.utils import timezone
 
 from monitoring_app.models import Baseline
 from registry_app.models import ModelVersion
@@ -33,8 +34,46 @@ class Incident(models.Model):
     category = models.CharField(max_length=24, choices=CATEGORY, default="UNKNOWN")
     root_cause = models.TextField(blank=True, default="")
 
+    TERMINAL = ("RESOLVED", "ESCALATED")
+
     class Meta:
         ordering = ["-opened_at"]
+
+    # ---- lifecycle state machine (owned here, not in the view) ----------
+    # OPEN --(nontrivial action)--> RECOVERING --+--(KEEP)----> RESOLVED  (terminal)
+    #                                            +--(ESCALATE)-> ESCALATED (terminal)
+    #                                            +--(REVERT)---> RECOVERING (stays open)
+
+    @classmethod
+    def open_or_reuse(cls, version: ModelVersion, severity: str) -> "Incident":
+        """Reuse the latest non-terminal incident for this version, else open one."""
+        inc = (version.incidents.exclude(status__in=cls.TERMINAL)
+               .order_by("-opened_at").first())
+        return inc or cls.objects.create(affected_version=version, severity=severity)
+
+    def begin_recovery(self, severity: str) -> None:
+        self.status, self.severity = "RECOVERING", severity
+        self.save(update_fields=["status", "severity"])
+
+    def resolve(self) -> None:
+        self.status, self.closed_at = "RESOLVED", timezone.now()
+        self.save(update_fields=["status", "closed_at"])
+
+    def escalate(self) -> None:
+        self.status, self.closed_at = "ESCALATED", timezone.now()
+        self.save(update_fields=["status", "closed_at"])
+
+    def keep_recovering(self) -> None:
+        """A REVERT verdict: the recovery failed and was undone — keep the incident
+        open for another attempt rather than force-closing it."""
+        self.status, self.closed_at = "RECOVERING", None
+        self.save(update_fields=["status", "closed_at"])
+
+    def apply_verification(self, decision: str) -> None:
+        """Drive the close transition from a VERIFY verdict (KEEP/ESCALATE/REVERT)."""
+        {"KEEP": self.resolve,
+         "ESCALATE": self.escalate,
+         "REVERT": self.keep_recovering}[decision]()
 
 
 class ActionLog(models.Model):
@@ -86,3 +125,9 @@ class VerificationResult(models.Model):
 
     class Meta:
         ordering = ["-verified_at"]
+
+    @staticmethod
+    def decide(recovered: bool, escalate: bool) -> str:
+        """Map a VERIFY outcome to a verdict: recovered -> KEEP; else escalate ->
+        ESCALATE; else REVERT (recovery failed but a retry is still possible)."""
+        return "KEEP" if recovered else ("ESCALATE" if escalate else "REVERT")

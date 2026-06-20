@@ -123,3 +123,36 @@ class ActionsAuthTests(TestCase):
     def test_actions_requires_token(self):
         self.assertEqual(Client().get("/api/actions").status_code, 401)
         self.assertEqual(authed_client().get("/api/actions").status_code, 200)
+
+
+class IncidentLifecycleTests(TestCase):
+    def setUp(self):
+        from registry_app.models import Model, ModelVersion
+        self.v = ModelVersion.objects.create(
+            model=Model.objects.create(model_name="model_a"),
+            version="1.0.0", artifact_path="x")
+
+    def test_open_or_reuse_reuses_non_terminal(self):
+        a = Incident.open_or_reuse(self.v, "HIGH")
+        b = Incident.open_or_reuse(self.v, "HIGH")
+        self.assertEqual(a.pk, b.pk)               # reused, not a second incident
+        a.resolve()
+        c = Incident.open_or_reuse(self.v, "HIGH")
+        self.assertNotEqual(a.pk, c.pk)            # terminal -> a fresh incident
+
+    def test_apply_verification_transitions(self):
+        from django.utils import timezone
+        inc = Incident.open_or_reuse(self.v, "HIGH"); inc.begin_recovery("HIGH")
+        inc.apply_verification("REVERT")
+        self.assertEqual(inc.status, "RECOVERING")
+        self.assertIsNone(inc.closed_at)
+        inc.apply_verification("KEEP")
+        self.assertEqual(inc.status, "RESOLVED")
+        self.assertIsNotNone(inc.closed_at)
+        inc.apply_verification("ESCALATE")
+        self.assertEqual(inc.status, "ESCALATED")
+
+    def test_verification_decide(self):
+        self.assertEqual(VerificationResult.decide(True, False), "KEEP")
+        self.assertEqual(VerificationResult.decide(False, True), "ESCALATE")
+        self.assertEqual(VerificationResult.decide(False, False), "REVERT")

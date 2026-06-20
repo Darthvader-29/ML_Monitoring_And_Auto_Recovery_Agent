@@ -39,6 +39,8 @@ def _parse_limit(request) -> int:
     except (TypeError, ValueError):
         return _DEFAULT_LIMIT
     return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
+
+
 # Actions the agent can automatically undo: a traffic SWITCH can be switched back,
 # a ROLLBACK re-applied, DISABLE re-enabled. NO_OP/ALERT have nothing to revert and
 # RETRAIN is not cleanly reversible. (The old `action in _NONTRIVIAL or action in
@@ -59,15 +61,6 @@ def _resolve_version(model_name: str) -> ModelVersion:
     return mv
 
 
-def _incident_for(version: ModelVersion, severity: str) -> Incident:
-    """Reuse the latest non-terminal incident for this version, else open one."""
-    inc = (version.incidents
-           .exclude(status__in=["RESOLVED", "ESCALATED"]).order_by("-opened_at").first())
-    if inc is None:
-        inc = Incident.objects.create(affected_version=version, severity=severity)
-    return inc
-
-
 class ActionsView(APIView):
     def post(self, request):
         d = request.data or {}
@@ -75,7 +68,7 @@ class ActionsView(APIView):
         target = (str(d.get("target_model") or "").strip()) or "model_a"
         version = _resolve_version(target)
         severity = str(d.get("severity", "LOW")).upper()
-        incident = _incident_for(version, severity)
+        incident = Incident.open_or_reuse(version, severity)
 
         log = ActionLog.objects.create(
             incident=incident, model_version=version, action=action,
@@ -85,9 +78,7 @@ class ActionsView(APIView):
             is_reversible=action in _REVERSIBLE,
         )
         if action in _NONTRIVIAL:
-            incident.status = "RECOVERING"
-            incident.severity = severity
-            incident.save(update_fields=["status", "severity"])
+            incident.begin_recovery(severity)
         return Response(ActionLogSerializer(log).data, status=status.HTTP_201_CREATED)
 
     def get(self, request):
@@ -122,22 +113,11 @@ class ActionDetailView(APIView):
         ver = d.get("verification")
         if ver is not None:
             recovered = bool(ver.get("recovered"))
-            escalate = bool(ver.get("escalate_to_human"))
-            decision = "KEEP" if recovered else ("ESCALATE" if escalate else "REVERT")
+            decision = VerificationResult.decide(recovered, bool(ver.get("escalate_to_human")))
             VerificationResult.objects.update_or_create(
                 action=log, defaults={
                     "success": recovered, "decision": decision,
                     "post_metrics": ver})
-            # Three-way close: KEEP -> RESOLVED, ESCALATE -> ESCALATED (both
-            # terminal). A REVERT means the recovery failed and was undone — the
-            # incident is NOT resolved; keep it open (RECOVERING) so the loop can
-            # try again, rather than force-closing it as ESCALATED.
-            inc = log.incident
-            if decision == "KEEP":
-                inc.status, inc.closed_at = "RESOLVED", timezone.now()
-            elif decision == "ESCALATE":
-                inc.status, inc.closed_at = "ESCALATED", timezone.now()
-            else:  # REVERT
-                inc.status, inc.closed_at = "RECOVERING", None
-            inc.save(update_fields=["status", "closed_at"])
+            # The incident drives its own close transition from the verdict.
+            log.incident.apply_verification(decision)
         return Response(ActionLogSerializer(log).data)
