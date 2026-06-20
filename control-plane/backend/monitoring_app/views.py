@@ -7,8 +7,9 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from registry_app.models import Model, ModelVersion
+from registry_app.models import ModelVersion
 
+from api_common import error_response, parse_limit, resolve_version
 from .models import MetricSnapshot
 from .serializers import MetricSnapshotSerializer
 
@@ -27,32 +28,9 @@ def _parse_timestamp(value):
         parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
     return parsed
 
+
 # agent health string (healthy/degraded/unhealthy) -> DB enum
 _HEALTH_MAP = {"healthy": "HEALTHY", "degraded": "DEGRADED", "unhealthy": "UNHEALTHY"}
-
-_DEFAULT_LIMIT, _MAX_LIMIT = 50, 500
-
-
-def _parse_limit(request) -> int:
-    """A safe `?limit`: non-integer/negative falls back to the default, capped so a
-    caller cannot pull the whole table or crash the view with a negative slice."""
-    raw = request.query_params.get("limit", _DEFAULT_LIMIT)
-    try:
-        n = int(raw)
-    except (TypeError, ValueError):
-        return _DEFAULT_LIMIT
-    return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
-
-
-def _resolve_version(model_name: str, version: str) -> ModelVersion:
-    # Normalize so a stray-whitespace typo resolves to the SAME registry row instead
-    # of materializing a phantom Model/ModelVersion.
-    model_name = str(model_name).strip()
-    model, _ = Model.objects.get_or_create(model_name=model_name)
-    mv, _ = ModelVersion.objects.get_or_create(
-        model=model, version=version or "unknown",
-        defaults={"artifact_path": f"model-services/{model_name}/model.pkl"})
-    return mv
 
 
 class MetricsView(APIView):
@@ -60,10 +38,8 @@ class MetricsView(APIView):
         d = request.data or {}
         model_name = str(d.get("model_name") or "").strip()
         if not model_name:
-            return Response({"error": {"code": "validation_error",
-                             "message": "model_name required"}},
-                            status=status.HTTP_400_BAD_REQUEST)
-        mv = _resolve_version(model_name, str(d.get("model_version", "unknown")))
+            return error_response("validation_error", "model_name required")
+        mv = resolve_version(model_name, d.get("model_version") or "unknown")
         snap = MetricSnapshot.objects.create(
             model_version=mv,
             timestamp=_parse_timestamp(d.get("timestamp")),
@@ -88,7 +64,7 @@ class MetricsView(APIView):
         model = request.query_params.get("model")
         if model:
             qs = qs.filter(model_version__model__model_name=model)
-        qs = qs[:_parse_limit(request)]
+        qs = qs[:parse_limit(request)]
         return Response(MetricSnapshotSerializer(qs, many=True).data)
 
 
