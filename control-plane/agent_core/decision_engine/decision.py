@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import config
 from schemas import SEVERITY_RANK, ActionType, Decision, DetectionResult
 
 from decision_engine import policy_rules, severity_classifier
@@ -42,11 +43,19 @@ def make_decision(
     target = backup_model if action == ActionType.SWITCH_BACKUP else active_model
     reason = rationale if worst is None else f"{rationale} [{worst.message}]"
 
+    # A switch runs through Jenkins only when that executor is configured; surface
+    # which job will run so the audit record matches the executor actually used
+    # (these fields were previously hardcoded to False/None).
+    requires_jenkins = (action == ActionType.SWITCH_BACKUP
+                        and config.settings.executor_type == "jenkins")
+    jenkins_job = config.settings.jenkins_job_switch if requires_jenkins else None
+
     return Decision(
         action=action,
         severity=severity,
         target_model=target,
         reason=reason,
         detection_signal=worst,
-        requires_jenkins=False,   # MVP uses the direct executor; Jenkins arrives Phase 5
+        requires_jenkins=requires_jenkins,
+        jenkins_job=jenkins_job,
     )

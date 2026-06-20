@@ -66,3 +66,24 @@ def test_decision_switch_targets_backup():
         [_thr("error_rate", 0.6)], active_model="model_a", backup_model="model_b",
         backup_healthy=True, action_gated=False)
     assert d.action == ActionType.SWITCH_BACKUP and d.target_model == "model_b"
+
+
+def test_decision_jenkins_fields_track_executor():
+    import dataclasses
+    import config
+    base = [_thr("error_rate", 0.6)]
+    kw = dict(active_model="model_a", backup_model="model_b",
+              backup_healthy=True, action_gated=False)
+
+    # direct executor (default): no Jenkins
+    d = decision_engine.make_decision(base, **kw)
+    assert d.requires_jenkins is False and d.jenkins_job is None
+
+    # jenkins executor: a switch surfaces the job it will run
+    original = config.settings
+    config.settings = dataclasses.replace(original, executor_type="jenkins")
+    try:
+        d = decision_engine.make_decision(base, **kw)
+    finally:
+        config.settings = original
+    assert d.requires_jenkins is True and d.jenkins_job == "switch_active_model"

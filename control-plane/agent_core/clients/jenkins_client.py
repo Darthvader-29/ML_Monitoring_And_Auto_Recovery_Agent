@@ -10,13 +10,13 @@ permanent fallback.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from typing import Optional
 
 import requests
 
 import config
+from retry import poll_until
 
 log = logging.getLogger("agent.clients.jenkins")
 
@@ -74,7 +74,7 @@ class JenkinsClient:
     def resolve_queue(self, queue_url: str, attempts: int = 30,
                       backoff: float = 1.0) -> Optional[dict]:
         """Poll the queue item until it yields an executable (build number/url)."""
-        for _ in range(attempts):
+        def _try() -> Optional[dict]:
             try:
                 r = requests.get(f"{queue_url.rstrip('/')}/api/json",
                                  auth=self._auth, timeout=self._poll_timeout)
@@ -84,13 +84,14 @@ class JenkinsClient:
                         return {"number": ex.get("number"), "url": ex.get("url")}
             except (requests.RequestException, ValueError):
                 pass
-            time.sleep(backoff)
-        return None
+            return None
+
+        return poll_until(_try, attempts=attempts, delay=backoff)
 
     def poll_build(self, build_url: str, attempts: int = 60,
                    backoff: float = 1.0) -> Optional[dict]:
         """Poll a build until building=false; return {result, number, url}."""
-        for _ in range(attempts):
+        def _try() -> Optional[dict]:
             try:
                 r = requests.get(f"{build_url.rstrip('/')}/api/json",
                                  auth=self._auth, timeout=self._poll_timeout)
@@ -101,8 +102,9 @@ class JenkinsClient:
                                 "url": b.get("url")}
             except (requests.RequestException, ValueError):
                 pass
-            time.sleep(backoff)
-        return None
+            return None
+
+        return poll_until(_try, attempts=attempts, delay=backoff)
 
     # ---- high-level orchestration --------------------------------------
 
