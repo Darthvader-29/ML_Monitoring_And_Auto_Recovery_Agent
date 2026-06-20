@@ -13,9 +13,6 @@ import requests
 
 import config
 
-_TIMEOUT = (config.settings.http_connect_timeout_seconds,
-            config.settings.http_read_timeout_seconds)
-
 
 @dataclass
 class PredictionProbe:
@@ -41,7 +38,8 @@ def probe_predictions(endpoint_url: str, rows: list[dict]) -> PredictionProbe:
         attempted += 1
         try:
             resp = requests.post(f"{endpoint_url}/predict",
-                                 json={"features": row}, timeout=_TIMEOUT)
+                                 json={"features": row},
+                                 timeout=config.settings.http_timeout())
             if resp.status_code != 200:
                 failed += 1
                 continue

@@ -40,8 +40,8 @@ class JenkinsClient:
         s = config.settings
         self._base = (base_url or s.jenkins_url).rstrip("/")
         self._auth = (user or s.jenkins_user, token or s.jenkins_api_token)
-        self._trigger_timeout = (s.http_connect_timeout_seconds, 10.0)
-        self._poll_timeout = (s.http_connect_timeout_seconds, 30.0)
+        self._trigger_timeout = s.http_timeout(read=10.0)
+        self._poll_timeout = s.http_timeout(read=30.0)
 
     # ---- low-level steps ------------------------------------------------
 

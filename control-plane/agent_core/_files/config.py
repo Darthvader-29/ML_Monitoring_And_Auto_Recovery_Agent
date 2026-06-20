@@ -144,6 +144,13 @@ class Settings:
         default_factory=lambda: tuple(FEATURE_COLS)
     )
 
+    def http_timeout(self, read: float | None = None) -> tuple[float, float]:
+        """The requests `(connect, read)` timeout tuple — the one place it is built
+        from the configured connect/read seconds. Pass `read` to override the read
+        leg for short health probes / long Jenkins polls instead of hardcoding it."""
+        return (self.http_connect_timeout_seconds,
+                self.http_read_timeout_seconds if read is None else read)
+
 
 def load_settings() -> Settings:
     """Build a Settings instance from defaults + .env + process environment."""

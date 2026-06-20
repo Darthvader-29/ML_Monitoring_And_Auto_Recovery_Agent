@@ -35,9 +35,6 @@ class DjangoClientProtocol(Protocol):
     def patch_action(self, action_id: Optional[int],
                      verification: VerificationResult) -> None: ...
 
-_TIMEOUT = (config.settings.http_connect_timeout_seconds,
-            config.settings.http_read_timeout_seconds)
-
 
 class NullDjangoClient:
     """No-op implementation used when no backend is reachable."""
@@ -74,7 +71,7 @@ class DjangoClient:
     def _post(self, path: str, body: dict) -> Optional[dict]:
         try:
             r = requests.post(f"{self._base}{path}", json=body,
-                              headers=self._headers, timeout=_TIMEOUT)
+                              headers=self._headers, timeout=config.settings.http_timeout())
             if r.status_code < 300:
                 return r.json()
             log.warning("POST %s -> %s", path, r.status_code)
@@ -106,7 +103,7 @@ class DjangoClient:
         for attempt in range(3):
             try:
                 r = requests.get(f"{self._base}/api/active-model",
-                                 headers=self._headers, timeout=_TIMEOUT)
+                                 headers=self._headers, timeout=config.settings.http_timeout())
                 if r.status_code == 200:
                     return r.json().get("model_name")
             except (requests.RequestException, ValueError) as exc:
@@ -137,7 +134,7 @@ class DjangoClient:
             requests.patch(f"{self._base}/api/actions/{action_id}",
                            json={"outcome": outcome.value,
                                  "verification": verification.model_dump(mode="json")},
-                           headers=self._headers, timeout=_TIMEOUT)
+                           headers=self._headers, timeout=config.settings.http_timeout())
         except requests.RequestException as exc:
             log.warning("patch_action failed: %s", exc)
 
