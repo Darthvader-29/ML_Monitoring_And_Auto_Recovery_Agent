@@ -45,8 +45,8 @@ services:
   # ---------------------------------------------------------------- model_a (ACTIVE)
   model_a:
     build:
-      context: ../../model-services/model_a
-      dockerfile: Dockerfile
+      context: ../../model-services
+      dockerfile: model_a/Dockerfile
     image: mlmon/model_a:latest
     container_name: model_a
     ports:
@@ -64,8 +64,8 @@ services:
   # ---------------------------------------------------------------- model_b (BACKUP)
   model_b:
     build:
-      context: ../../model-services/model_b
-      dockerfile: Dockerfile
+      context: ../../model-services
+      dockerfile: model_b/Dockerfile
     image: mlmon/model_b:latest
     container_name: model_b
     ports:

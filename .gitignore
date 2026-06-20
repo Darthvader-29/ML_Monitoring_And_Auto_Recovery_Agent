@@ -213,3 +213,8 @@ __marimo__/
 # Data simulation: regenerable reference artifacts (deterministic, seed-locked).
 # model.pkl and sample_input*.csv ARE committed (bundled service artifacts).
 data_sim/artifacts/
+
+# transient tooling venvs (code review / verification)
+.audit_venv/
+.django_venv/
+.model_venv/
