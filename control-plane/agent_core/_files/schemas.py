@@ -52,6 +52,12 @@ class Severity(str, Enum):
     CRITICAL = "CRITICAL"
 
 
+# Ascending severity order — the single source of truth for "which is worse",
+# previously copy-pasted into decision.py and severity_classifier.py.
+SEVERITY_RANK = {Severity.LOW: 1, Severity.MEDIUM: 2,
+                 Severity.HIGH: 3, Severity.CRITICAL: 4}
+
+
 class ActionType(str, Enum):
     NO_OP = "no_op"
     ALERT = "alert"

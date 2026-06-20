@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Protocol
 
 import requests
 
@@ -22,8 +22,18 @@ from schemas import ActionResult, Decision, MetricSnapshot, Outcome, Verificatio
 
 log = logging.getLogger("agent.clients.django")
 
-_TIMEOUT = (config.settings.http_connect_timeout_seconds,
-            config.settings.http_read_timeout_seconds)
+
+class DjangoClientProtocol(Protocol):
+    """The control-plane client contract the agent loop depends on. Both
+    `DjangoClient` and `NullDjangoClient` satisfy it, and `run()` accepts any
+    implementation (so tests can inject a fake — see test_loop_scenarios)."""
+
+    def post_metrics(self, snapshot: MetricSnapshot, **kw) -> None: ...
+    def get_active_model(self) -> Optional[str]: ...
+    def set_active_model(self, model_name: str, reason: str = "") -> None: ...
+    def post_action(self, decision: Decision, result: ActionResult) -> Optional[int]: ...
+    def patch_action(self, action_id: Optional[int],
+                     verification: VerificationResult) -> None: ...
 
 
 class NullDjangoClient:
@@ -61,7 +71,7 @@ class DjangoClient:
     def _post(self, path: str, body: dict) -> Optional[dict]:
         try:
             r = requests.post(f"{self._base}{path}", json=body,
-                              headers=self._headers, timeout=_TIMEOUT)
+                              headers=self._headers, timeout=config.settings.http_timeout())
             if r.status_code < 300:
                 return r.json()
             log.warning("POST %s -> %s", path, r.status_code)
@@ -93,7 +103,7 @@ class DjangoClient:
         for attempt in range(3):
             try:
                 r = requests.get(f"{self._base}/api/active-model",
-                                 headers=self._headers, timeout=_TIMEOUT)
+                                 headers=self._headers, timeout=config.settings.http_timeout())
                 if r.status_code == 200:
                     return r.json().get("model_name")
             except (requests.RequestException, ValueError) as exc:
@@ -124,7 +134,7 @@ class DjangoClient:
             requests.patch(f"{self._base}/api/actions/{action_id}",
                            json={"outcome": outcome.value,
                                  "verification": verification.model_dump(mode="json")},
-                           headers=self._headers, timeout=_TIMEOUT)
+                           headers=self._headers, timeout=config.settings.http_timeout())
         except requests.RequestException as exc:
             log.warning("patch_action failed: %s", exc)
 

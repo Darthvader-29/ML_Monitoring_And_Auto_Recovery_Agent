@@ -12,9 +12,7 @@ monitoring_and_metrics.md §6.2).
 from __future__ import annotations
 
 import config
-from schemas import DetectionResult, Severity
-
-_RANK = {Severity.LOW: 1, Severity.MEDIUM: 2, Severity.HIGH: 3, Severity.CRITICAL: 4}
+from schemas import SEVERITY_RANK, DetectionResult, Severity
 
 _P95_LOW, _P95_MED = 150.0, 300.0
 _DRIFT_SHARE_MED = 0.30   # share of features drifted => MED (detection_methods.md §4.7)
@@ -91,4 +89,5 @@ def classify(detections: list[DetectionResult]) -> Severity:
     breaching = [d for d in detections if d.anomaly_detected]
     if not breaching:
         return Severity.LOW
-    return max((classify_detection(d) for d in breaching), key=lambda sev: _RANK[sev])
+    return max((classify_detection(d) for d in breaching),
+               key=lambda sev: SEVERITY_RANK[sev])

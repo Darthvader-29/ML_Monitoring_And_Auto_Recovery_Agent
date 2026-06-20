@@ -1,8 +1,10 @@
 """Tests for the registry: atomic single-active invariant + /api/active-model."""
 import json
+from unittest import skipUnless
 
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
+from _testutil import AUTH_ENABLED, authed_client
 
 from .models import ActiveModelPointer, Model, ModelVersion
 
@@ -36,7 +38,7 @@ class RegistryTests(TestCase):
 
     def test_active_model_endpoint_flip(self):
         ActiveModelPointer.switch_to(self.a)
-        c = Client()
+        c = authed_client()
         self.assertEqual(c.get("/api/active-model").json()["model_name"], "model_a")
         resp = c.post("/api/active-model", data=json.dumps({"model_name": "model_b"}),
                       content_type="application/json")
@@ -51,7 +53,7 @@ class RegistryTests(TestCase):
         ModelVersion.objects.create(
             model=self.a.model, version="2.0.0", artifact_path="x",
             endpoint_url="http://model_a:8004", port=8004, status="DEPRECATED")
-        c = Client()
+        c = authed_client()
         resp = c.post("/api/active-model",
                       data=json.dumps({"model_name": "model_a", "reason": "promote stable"}),
                       content_type="application/json")
@@ -70,7 +72,7 @@ class TopologyExposureTests(TestCase):
             artifact_path="x", endpoint_url="http://model_a:8001", port=8001)
 
     def test_topology_present_by_default(self):
-        row = Client().get("/api/models").json()[0]
+        row = authed_client().get("/api/models").json()[0]
         self.assertIn("endpoint_url", row)
         self.assertIn("port", row)
         self.assertEqual(row["endpoint_url"], "http://model_a:8001")
@@ -78,9 +80,16 @@ class TopologyExposureTests(TestCase):
 
     @override_settings(EXPOSE_INTERNAL_TOPOLOGY=False)
     def test_topology_hidden_when_flag_off(self):
-        row = Client().get("/api/models").json()[0]
+        row = authed_client().get("/api/models").json()[0]
         self.assertNotIn("endpoint_url", row)
         self.assertNotIn("port", row)
         # Non-sensitive fields remain.
         self.assertIn("model_name", row)
         self.assertIn("version", row)
+
+
+@skipUnless(AUTH_ENABLED, "auth disabled")
+class RegistryAuthTests(TestCase):
+    def test_models_requires_token(self):
+        self.assertEqual(Client().get("/api/models").status_code, 401)
+        self.assertEqual(authed_client().get("/api/models").status_code, 200)

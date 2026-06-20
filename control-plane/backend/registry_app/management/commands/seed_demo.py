@@ -43,3 +43,16 @@ class Command(BaseCommand):
         ActiveModelPointer.switch_to(versions["model_a"], by="seed")
         self.stdout.write(self.style.SUCCESS(
             "Seeded model_a (ACTIVE) + model_b (BACKUP); active -> model_a"))
+
+        # The API requires a token by default, so mint one for the agent and surface
+        # it. Operators export it as DJANGO_API_TOKEN so the agent can authenticate.
+        try:
+            from django.contrib.auth import get_user_model
+            from rest_framework.authtoken.models import Token
+            user, _ = get_user_model().objects.get_or_create(username="agent")
+            token, _ = Token.objects.get_or_create(user=user)
+            self.stdout.write(self.style.SUCCESS(
+                f"Agent API token: {token.key}\n"
+                f"  export DJANGO_API_TOKEN={token.key}   # for the agent"))
+        except Exception as exc:  # authtoken not installed (DJANGO_REQUIRE_AUTH=0)
+            self.stdout.write(f"(token auth disabled — skipping token: {exc})")

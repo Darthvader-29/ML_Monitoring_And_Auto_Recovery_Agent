@@ -52,9 +52,8 @@ def _patch(monkeypatch, *, a_error, b_healthy=True):
 
 
 def _detectors():
-    from detection.anomaly_detector import AnomalyDetector
-    from detection.drift_detector import DriftDetector
-    return (AnomalyDetector(), DriftDetector())
+    # The unified detector registry (threshold + anomaly + drift), stateful per run.
+    return agent.default_detectors()
 
 
 def test_A1_error_spike_switches_after_confirm(monkeypatch):

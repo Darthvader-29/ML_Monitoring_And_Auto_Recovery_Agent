@@ -6,12 +6,23 @@ DJANGO_DB_* env vars. The agent reaches this service only over /api/* — no sha
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-change-me")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") not in ("0", "false", "False")
+# Secure by default: DEBUG is OFF unless DJANGO_DEBUG explicitly enables it. Run the
+# local dev server with `DJANGO_DEBUG=1`.
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") in ("1", "true", "True")
+
+_DEV_SECRET = "dev-insecure-change-me"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _DEV_SECRET)
+if SECRET_KEY == _DEV_SECRET and not DEBUG:
+    # Loud, non-fatal warning so a forgotten secret is obvious in prod logs without
+    # breaking the zero-config local/test path.
+    warnings.warn("DJANGO_SECRET_KEY is unset; using the insecure dev key with "
+                  "DEBUG=False. Set a real secret before deploying.", stacklevel=2)
+
 ALLOWED_HOSTS = os.environ.get(
     "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend").split(",")
 
@@ -26,8 +37,11 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+X_FRAME_OPTIONS = "DENY"
 
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
@@ -49,9 +63,11 @@ DATABASES = {
     }
 }
 
-# The agent authenticates with a token in production (api_contracts.md §B). For the
-# local demo we default to open access; set DJANGO_REQUIRE_AUTH=1 to require a token.
-_REQUIRE_AUTH = os.environ.get("DJANGO_REQUIRE_AUTH", "0") in ("1", "true", "True")
+# Secure by default: the mutating + read API requires a token. The agent already
+# sends `Authorization: Token …` (config.DJANGO_API_TOKEN). Set DJANGO_REQUIRE_AUTH=0
+# to fall back to open access for a throwaway local demo. (The /api/health/ probe and
+# the read-only dashboard are plain Django views and stay public by design.)
+_REQUIRE_AUTH = os.environ.get("DJANGO_REQUIRE_AUTH", "1") in ("1", "true", "True")
 
 # Data-privacy hardening (opt-in). When False, the read serializers drop internal
 # service topology (endpoint_url/port) and raw operational metric blobs
@@ -69,9 +85,30 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    # Cheap DoS protection on the unauthenticated edge and per-agent fairness.
+    # Generous so a normal agent cadence (one sweep per poll interval) never trips.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.environ.get("DJANGO_THROTTLE_ANON", "60/min"),
+        "user": os.environ.get("DJANGO_THROTTLE_USER", "2000/min"),
+    },
 }
 if _REQUIRE_AUTH:
     INSTALLED_APPS.append("rest_framework.authtoken")
+
+# Transport hardening — only meaningful behind TLS. Gated on DEBUG off, and the
+# HTTPS-redirect is itself opt-in (DJANGO_SSL_REDIRECT=1) so a plain-HTTP local run
+# or the test suite is not 301-redirected. The cookie/nosniff flags are harmless
+# over HTTP (the API uses tokens, not cookies).
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SSL_REDIRECT", "0") in ("1", "true", "True")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0") or 0)
+    SECURE_CONTENT_TYPE_NOSNIFF = True
 
 USE_TZ = True
 TIME_ZONE = "UTC"

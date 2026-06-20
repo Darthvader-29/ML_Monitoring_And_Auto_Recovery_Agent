@@ -16,9 +16,9 @@ import requests
 import config
 from schemas import HealthStatus, MetricSnapshot
 
-_TIMEOUT = (config.settings.http_connect_timeout_seconds,
-            config.settings.http_read_timeout_seconds)
-_HEALTH_TIMEOUT = (config.settings.http_connect_timeout_seconds, 1.5)
+# Short read leg for the liveness probe; resolved at call time so settings overrides
+# (and the single timeout accessor) take effect.
+_HEALTH_READ_TIMEOUT = 1.5
 
 
 @dataclass
@@ -33,7 +33,8 @@ class HealthProbe:
 def probe_health(endpoint_url: str) -> HealthProbe:
     """GET /health. Unreachable or non-2xx => UNHEALTHY (still a valid observation)."""
     try:
-        resp = requests.get(f"{endpoint_url}/health", timeout=_HEALTH_TIMEOUT)
+        resp = requests.get(f"{endpoint_url}/health",
+                            timeout=config.settings.http_timeout(read=_HEALTH_READ_TIMEOUT))
         body = resp.json()
         status = HealthStatus(body.get("status", "unhealthy"))
         return HealthProbe(
@@ -52,7 +53,7 @@ def probe_metrics(endpoint_url: str, model_name: str) -> Optional[MetricSnapshot
     """GET /metrics -> MetricSnapshot. Returns None if the service is unreachable."""
     try:
         resp = requests.get(f"{endpoint_url}/metrics", params={"window": "5m"},
-                            timeout=_TIMEOUT)
+                            timeout=config.settings.http_timeout())
         if resp.status_code != 200:
             return None
         m = resp.json()

@@ -30,11 +30,9 @@ import config                                      # noqa: E402
 from schemas import (ActionType, HealthStatus, MetricSnapshot,  # noqa: E402
                      Outcome, Severity)
 from monitoring import data_loader, model_probe, prediction_probe  # noqa: E402
-from detection import threshold_detector  # noqa: E402
-from detection.anomaly_detector import AnomalyDetector  # noqa: E402
-from detection.drift_detector import DriftDetector  # noqa: E402
+from detection.registry import DetectionContext, default_detectors  # noqa: E402
 from decision_engine import decision as decision_engine  # noqa: E402
-from actions import alert, no_op, switch_model  # noqa: E402
+from actions import dispatch  # noqa: E402
 from verification import health_check, rollback_guard  # noqa: E402
 from clients import django_client  # noqa: E402
 
@@ -71,8 +69,10 @@ def _build_runtime(args) -> AgentRuntime:
 
 
 def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
-    """One full Observe->Detect->Decide->Act->Verify cycle. Returns an episode dict."""
-    anomaly_det, drift_det = detectors
+    """One full Observe->Detect->Decide->Act->Verify cycle. Returns an episode dict.
+
+    `detectors` is the unified Detector list from detection.registry (stateful
+    across ticks); `dj` is any DjangoClientProtocol implementation."""
     active = runtime.active_model
     backup = runtime.backup_model()
     endpoint = runtime.endpoint_for(active)
@@ -98,28 +98,21 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
     backup_healthy = bool(backup_health and backup_health.reachable
                           and backup_health.status == HealthStatus.HEALTHY)
 
-    # ---- DETECT (all three channels: threshold + anomaly + drift) ----
-    detections = threshold_detector.detect(
-        metrics, reachable=health.reachable, health_status=health.status,
-        consecutive_health_failures=runtime.consecutive_health_failures,
-        inference_failure_rate=pred.inference_failure_rate,
-        low_confidence_ratio=pred.low_confidence_ratio)
-    if metrics is not None:
-        detections += anomaly_det.evaluate({
-            "error_rate": metrics.error_rate,
-            "avg_latency_ms": metrics.avg_latency_ms,
-            "p95_latency_ms": metrics.p95_latency_ms,
-            "inference_failure_rate": pred.inference_failure_rate,
-            "avg_confidence": metrics.avg_confidence,
-        })
+    # ---- DETECT (uniform Detector registry: threshold + anomaly + drift) ----
     # Drift uses a large varied batch (>=200 rows), decoupled from the small
     # prediction sample above (detection_methods.md §4.1).
-    drift_dets = drift_det.evaluate_data_drift(
-        data_loader.load_batch(drift=runtime.inject_drift))
-    detections += drift_dets
-    drift_agg = next((d for d in drift_dets if d.metric == "data_drift_aggregate"), None)
+    ctx = DetectionContext(
+        metrics=metrics, reachable=health.reachable, health_status=health.status,
+        consecutive_health_failures=runtime.consecutive_health_failures,
+        inference_failure_rate=pred.inference_failure_rate,
+        low_confidence_ratio=pred.low_confidence_ratio,
+        drift_batch=data_loader.load_batch(drift=runtime.inject_drift))
+    detections = []
+    for detector in detectors:
+        detections += detector.detect(ctx)
+    drift_agg = next((d for d in detections if d.metric == "data_drift_aggregate"), None)
     drift_score = drift_agg.score if drift_agg else 0.0
-    drifted_count = len([d for d in drift_dets if d.metric == "data_drift_psi"])
+    drifted_count = len([d for d in detections if d.metric == "data_drift_psi"])
 
     # ---- DECIDE (severity + anti-flap gating) ----
     from decision_engine import severity_classifier
@@ -133,18 +126,11 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
         detections, active_model=active, backup_model=backup,
         backup_healthy=backup_healthy, action_gated=action_gated)
 
-    # ---- ACT ----
-    if decision.action == ActionType.SWITCH_BACKUP:
-        result = switch_model.execute(decision, runtime, dj)
-        if result.executed:
-            runtime.cooldown_remaining = config.settings.cooldown_cycles
-            runtime.recovery_attempts += 1
-    elif decision.action == ActionType.DISABLE_PREDICTIONS:
-        result = switch_model.execute(decision, runtime, dj)
-    elif decision.action == ActionType.ALERT:
-        result = alert.execute(decision)
-    else:
-        result = no_op.execute(decision)
+    # ---- ACT (single dispatch table; see actions/dispatch.py) ----
+    result = dispatch.dispatch(decision, runtime, dj)
+    if decision.action == ActionType.SWITCH_BACKUP and result.executed:
+        runtime.cooldown_remaining = config.settings.cooldown_cycles
+        runtime.recovery_attempts += 1
     if metrics:
         dj.post_metrics(metrics, overall_drift_score=drift_score,
                         drifted_feature_count=drifted_count)
@@ -177,14 +163,18 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
     return episode
 
 
-def run(runtime: AgentRuntime, ticks: Optional[int], interval: float) -> list[dict]:
-    dj = django_client.get_client()
+def run(runtime: AgentRuntime, ticks: Optional[int], interval: float,
+        client=None, detectors=None) -> list[dict]:
+    # Dependencies are injectable (tests/callers can pass a fake client or a custom
+    # detector list); defaults preserve the production wiring.
+    dj = client if client is not None else django_client.get_client()
     # Phase 4: the registry is the source of truth for the active model across
     # restarts; adopt it if the backend knows one.
     registry_active = dj.get_active_model()
     if registry_active in MODELS:
         runtime.active_model = registry_active
-    detectors = (AnomalyDetector(), DriftDetector())  # stateful across ticks
+    if detectors is None:
+        detectors = default_detectors()  # stateful across ticks
     log.info("agent start: active=%s executor=%s interval=%ss ticks=%s",
              runtime.active_model, config.settings.executor_type, interval,
              ticks if ticks is not None else "inf")

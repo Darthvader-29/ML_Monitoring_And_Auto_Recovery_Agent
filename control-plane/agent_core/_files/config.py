@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from feature_schema import FEATURE_COLS
+
 
 # ---- .env loading (stdlib only) -----------------------------------------
 
@@ -136,14 +138,18 @@ class Settings:
     low_confidence_ratio_med: float      # uncertain share >= this => MEDIUM
     low_confidence_ratio_high: float     # uncertain share >= this => HIGH
 
-    # --- Feature schema (data_simulation.md §2.1) — the real 8-feature Transaction
-    #     Risk schema (6 numeric + 2 categorical), matching data_loader/drift_detector
-    #     and the model services. The previous ("feature_1".."feature_6") tuple was a
-    #     stale 6-name placeholder that matched nothing the agent actually sends.
+    # --- Feature schema (data_simulation.md §2.1) — sourced from feature_schema,
+    #     the single source of truth shared with data_loader / drift_detector.
     feature_names: tuple[str, ...] = field(
-        default=("amount", "account_age_days", "num_txn_24h", "avg_txn_amount",
-                 "time_since_last_min", "device_risk", "country", "channel")
+        default_factory=lambda: tuple(FEATURE_COLS)
     )
+
+    def http_timeout(self, read: float | None = None) -> tuple[float, float]:
+        """The requests `(connect, read)` timeout tuple — the one place it is built
+        from the configured connect/read seconds. Pass `read` to override the read
+        leg for short health probes / long Jenkins polls instead of hardcoding it."""
+        return (self.http_connect_timeout_seconds,
+                self.http_read_timeout_seconds if read is None else read)
 
 
 def load_settings() -> Settings:

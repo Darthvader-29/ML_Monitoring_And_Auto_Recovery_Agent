@@ -22,6 +22,7 @@ from pathlib import Path
 
 from scipy.stats import chi2_contingency, ks_2samp
 
+from feature_schema import CATEGORICAL_COLS, NUMERIC_COLS
 from schemas import DetectionResult
 
 _DET = "drift_detector"
@@ -35,10 +36,6 @@ SHARE_THRESHOLD = 0.30
 N_CUR = 500
 N_CUR_MIN = 200
 EPS = 1e-4
-
-NUMERIC_COLS = ["amount", "account_age_days", "num_txn_24h",
-                "avg_txn_amount", "time_since_last_min", "device_risk"]
-CATEGORICAL_COLS = ["country", "channel"]
 # Concept-drift triggers (§5.2)
 DROP_ABS = 0.05
 DROP_REL = 0.10
