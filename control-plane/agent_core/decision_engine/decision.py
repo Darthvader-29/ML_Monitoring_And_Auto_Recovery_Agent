@@ -8,11 +8,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from schemas import ActionType, Decision, DetectionResult, Severity
+from schemas import SEVERITY_RANK, ActionType, Decision, DetectionResult
 
 from decision_engine import policy_rules, severity_classifier
-
-_RANK = {Severity.LOW: 1, Severity.MEDIUM: 2, Severity.HIGH: 3, Severity.CRITICAL: 4}
 
 
 def _worst(detections: list[DetectionResult]) -> Optional[DetectionResult]:
@@ -23,7 +21,8 @@ def _worst(detections: list[DetectionResult]) -> Optional[DetectionResult]:
     breaching = [d for d in detections if d.anomaly_detected]
     if not breaching:
         return None
-    return max(breaching, key=lambda d: _RANK[severity_classifier.classify_detection(d)])
+    return max(breaching,
+               key=lambda d: SEVERITY_RANK[severity_classifier.classify_detection(d)])
 
 
 def make_decision(

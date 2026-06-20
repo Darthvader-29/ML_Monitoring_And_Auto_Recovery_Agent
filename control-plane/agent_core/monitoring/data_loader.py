@@ -11,11 +11,8 @@ import csv
 import os
 from pathlib import Path
 
-# 8-feature Transaction Risk Scoring schema (data_simulation.md §2.1).
-NUMERIC_COLS = ["amount", "account_age_days", "num_txn_24h",
-                "avg_txn_amount", "time_since_last_min", "device_risk"]
-CATEGORICAL_COLS = ["country", "channel"]
-FEATURE_COLS = NUMERIC_COLS + CATEGORICAL_COLS
+# 8-feature Transaction Risk Scoring schema — declared once in feature_schema.
+from feature_schema import CATEGORICAL_COLS, FEATURE_COLS, NUMERIC_COLS
 
 # Repo root: AGENT_DATA_ROOT override (used when the agent runs in a container with
 # the repo data mounted, deployment_and_devops.md §3), else inferred from this file.
