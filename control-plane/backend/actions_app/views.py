@@ -14,15 +14,7 @@ from api_common import error_response, parse_limit, resolve_version
 from .models import ActionLog, Incident, VerificationResult
 from .serializers import ActionLogSerializer
 
-# agent ActionType (lowercase) -> DB ACTION enum
-_ACTION_MAP = {
-    "no_op": "NO_OP", "alert": "ALERT", "switch_backup": "SWITCH",
-    "rollback": "ROLLBACK", "retrain": "RETRAIN", "disable_predictions": "DISABLE",
-}
-# A skipped action did NOT succeed (e.g. target already active) — it must map to
-# its own SKIPPED outcome, not be silently recorded as SUCCESS in the audit trail.
-_OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
-                "skipped": "SKIPPED", "reverted": "REVERTED"}
+# Which DB actions are non-trivial enough to drive an incident into RECOVERING.
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
 
 # Actions the agent can automatically undo: a traffic SWITCH can be switched back,
@@ -35,7 +27,7 @@ _REVERSIBLE = {"SWITCH", "ROLLBACK", "DISABLE"}
 class ActionsView(APIView):
     def post(self, request):
         d = request.data or {}
-        action = _ACTION_MAP.get(str(d.get("action", "no_op")), "NO_OP")
+        action = ActionLog.action_from_agent(d.get("action", "no_op"))
         target = (str(d.get("target_model") or "").strip()) or "model_a"
         version = resolve_version(target)
         severity = str(d.get("severity", "LOW")).upper()
@@ -44,7 +36,7 @@ class ActionsView(APIView):
         log = ActionLog.objects.create(
             incident=incident, model_version=version, action=action,
             severity=severity, reason=d.get("reason", ""),
-            outcome=_OUTCOME_MAP.get(str(d.get("outcome", "pending")), "PENDING"),
+            outcome=ActionLog.outcome_from_agent(d.get("outcome", "pending")),
             before_metrics={"detection_signal": d.get("detection_signal")},
             is_reversible=action in _REVERSIBLE,
         )
@@ -55,8 +47,8 @@ class ActionsView(APIView):
     def get(self, request):
         qs = ActionLog.objects.select_related("model_version__model", "incident").all()
         if request.query_params.get("action"):
-            qs = qs.filter(action=_ACTION_MAP.get(request.query_params["action"],
-                                                  request.query_params["action"]))
+            param = request.query_params["action"]
+            qs = qs.filter(action=ActionLog.action_from_agent(param, default=param))
         qs = qs[:parse_limit(request)]
         return Response(ActionLogSerializer(qs, many=True).data)
 
@@ -69,7 +61,7 @@ class ActionDetailView(APIView):
             return error_response("not_found", status_code=status.HTTP_404_NOT_FOUND)
         d = request.data or {}
         if "outcome" in d:
-            log.outcome = _OUTCOME_MAP.get(str(d["outcome"]), log.outcome)
+            log.outcome = ActionLog.outcome_from_agent(d["outcome"], default=log.outcome)
         # Stamp execution time only when an outcome is actually being recorded, and
         # only once — re-PATCHing (e.g. a later verification update) must not move
         # an already-executed action's timestamp forward, nor fabricate one for a

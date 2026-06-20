@@ -88,6 +88,25 @@ class ActionLog(models.Model):
     OUTCOME = [("PENDING", "Pending"), ("SUCCESS", "Success"),
                ("FAILED", "Failed"), ("SKIPPED", "Skipped"), ("REVERTED", "Reverted")]
 
+    # Agent (api_contracts.md §B.3) lowercase vocab -> DB enum. Lives next to the
+    # choices it bridges, so the two vocabularies have one source of truth.
+    _AGENT_ACTION = {
+        "no_op": "NO_OP", "alert": "ALERT", "switch_backup": "SWITCH",
+        "rollback": "ROLLBACK", "retrain": "RETRAIN", "disable_predictions": "DISABLE",
+    }
+    _AGENT_OUTCOME = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
+                      "skipped": "SKIPPED", "reverted": "REVERTED"}
+
+    @classmethod
+    def action_from_agent(cls, value, default: str = "NO_OP") -> str:
+        return cls._AGENT_ACTION.get(str(value), default)
+
+    @classmethod
+    def outcome_from_agent(cls, value, default: str = "PENDING") -> str:
+        # A skipped action did NOT succeed (target already active) — it maps to its
+        # own SKIPPED outcome, never silently to SUCCESS.
+        return cls._AGENT_OUTCOME.get(str(value), default)
+
     incident = models.ForeignKey(Incident, on_delete=models.PROTECT, related_name="actions")
     model_version = models.ForeignKey(ModelVersion, on_delete=models.PROTECT,
                                       related_name="actions")
