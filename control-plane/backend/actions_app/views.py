@@ -92,7 +92,12 @@ class ActionDetailView(APIView):
         d = request.data or {}
         if "outcome" in d:
             log.outcome = _OUTCOME_MAP.get(str(d["outcome"]), log.outcome)
-        log.executed_at = timezone.now()
+        # Stamp execution time only when an outcome is actually being recorded, and
+        # only once — re-PATCHing (e.g. a later verification update) must not move
+        # an already-executed action's timestamp forward, nor fabricate one for a
+        # verification-only call. This keeps the append-only audit timeline honest.
+        if "outcome" in d and log.executed_at is None:
+            log.executed_at = timezone.now()
         if "after_metrics" in d:
             log.after_metrics = d["after_metrics"]
         log.save()

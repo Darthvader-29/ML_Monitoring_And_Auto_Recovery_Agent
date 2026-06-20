@@ -80,3 +80,20 @@ class MetricExposureTests(TestCase):
                 "reason": "r", "outcome": "pending"}),
                 content_type="application/json")
             self.assertEqual(ActionLog.objects.get().is_reversible, expected)
+
+    def test_executed_at_set_once_and_not_moved_on_repatch(self):
+        c = Client()
+        aid = c.post("/api/actions", data=json.dumps({
+            "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
+            "reason": "x", "outcome": "pending"}),
+            content_type="application/json").json()["id"]
+        # First patch records an outcome -> stamps executed_at.
+        c.patch(f"/api/actions/{aid}", data=json.dumps({"outcome": "success"}),
+                content_type="application/json")
+        first = ActionLog.objects.get(pk=aid).executed_at
+        self.assertIsNotNone(first)
+        # A later verification-only patch must NOT move executed_at.
+        c.patch(f"/api/actions/{aid}", data=json.dumps({
+            "verification": {"recovered": True, "model_checked": "model_b"}}),
+            content_type="application/json")
+        self.assertEqual(ActionLog.objects.get(pk=aid).executed_at, first)
