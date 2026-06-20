@@ -25,14 +25,21 @@ def _probe_once(model_name: str, endpoint_url: str,
     health = model_probe.probe_health(endpoint_url)
     metrics = model_probe.probe_metrics(endpoint_url, model_name)
 
-    post_error = metrics.error_rate if metrics else None
-    post_conf = metrics.avg_confidence if metrics else None
+    # A just-promoted backup has typically served NO requests at verify time, so its
+    # reported error_rate/avg_confidence are 0.0 by *absence of data*, not by
+    # failure. Only treat them as real observations once the model has actually
+    # served traffic — otherwise a healthy fresh backup would be failed on a 0.0
+    # confidence that merely means "no data yet" (causing an immediate rollback).
+    has_traffic = metrics is not None and metrics.request_count > 0
+    post_error = metrics.error_rate if has_traffic else None
+    post_conf = metrics.avg_confidence if has_traffic else None
 
     healthy = health.reachable and health.status == HealthStatus.HEALTHY
     error_ok = post_error is None or post_error <= s.error_rate_threshold
-    # Only a *missing* metric (None) may skip the confidence gate. A collapsed
-    # confidence of 0.0 is falsy but must NOT count as recovered — using
-    # `not post_conf` here let a fully-collapsed model pass verification.
+    # Only a *missing/not-yet-observed* metric (None) may skip the confidence gate.
+    # A collapsed confidence of 0.0 on a model that HAS served traffic is falsy but
+    # must NOT count as recovered — using `not post_conf` here let a fully-collapsed
+    # model pass verification.
     conf_ok = post_conf is None or post_conf >= s.confidence_floor
     recovered = healthy and error_ok and conf_ok
 
