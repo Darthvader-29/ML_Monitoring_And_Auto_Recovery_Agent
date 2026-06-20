@@ -17,9 +17,9 @@ _DET = "threshold_detector"
 
 # Actionable floors: below/under these a signal is not worth reporting. The HIGH
 # edges live in config (failure_scenarios.md §1.3); these LOW floors gate noise.
+# The mean-confidence "notable" edge lives in config (confidence_notable_floor).
 _ERROR_RATE_FLOOR = 0.01
 _P95_FLOOR_MS = 150.0
-_CONFIDENCE_NOTABLE = 0.78   # mean confidence at/under this is worth a signal
 _FAILURE_RATE_FLOOR = 0.01
 
 
@@ -30,6 +30,7 @@ def detect(
     health_status: HealthStatus,
     consecutive_health_failures: int,
     inference_failure_rate: float,
+    low_confidence_ratio: float = 0.0,
 ) -> list[DetectionResult]:
     s = config.settings
     results: list[DetectionResult] = []
@@ -74,11 +75,24 @@ def detect(
         ))
 
     # --- Confidence floor (note: lower is worse) ---
-    if 0.0 < metrics.avg_confidence <= _CONFIDENCE_NOTABLE:
+    if 0.0 < metrics.avg_confidence <= s.confidence_notable_floor:
         results.append(DetectionResult(
             detector=_DET, anomaly_detected=True, metric="avg_confidence",
             observed=round(metrics.avg_confidence, 6), threshold=s.confidence_floor,
             message=f"avg_confidence {metrics.avg_confidence:.3f}",
+        ))
+
+    # --- Confidence-based action threshold (Phase 8 bonus; OFF unless enabled) ---
+    # The share of uncertain predictions rises before the mean sags, so this is a
+    # leading signal. `score` carries the raw ratio for severity banding.
+    if s.confidence_gating_enabled and low_confidence_ratio >= s.low_confidence_ratio_med:
+        results.append(DetectionResult(
+            detector=_DET, anomaly_detected=True, metric="low_confidence_ratio",
+            observed=round(low_confidence_ratio, 6),
+            threshold=s.low_confidence_ratio_high,
+            score=round(low_confidence_ratio, 6),
+            message=(f"low_confidence_ratio {low_confidence_ratio:.3f} "
+                     f"(share < {s.low_confidence_cutoff:.2f})"),
         ))
 
     return results

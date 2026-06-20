@@ -102,7 +102,8 @@ def run_tick(runtime: AgentRuntime, dj, detectors, tick: int) -> dict:
     detections = threshold_detector.detect(
         metrics, reachable=health.reachable, health_status=health.status,
         consecutive_health_failures=runtime.consecutive_health_failures,
-        inference_failure_rate=pred.inference_failure_rate)
+        inference_failure_rate=pred.inference_failure_rate,
+        low_confidence_ratio=pred.low_confidence_ratio)
     if metrics is not None:
         detections += anomaly_det.evaluate({
             "error_rate": metrics.error_rate,

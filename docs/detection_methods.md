@@ -278,6 +278,24 @@ def evaluate(self, metrics) -> list[DetectionResult]:
   *cause* (drift vs infra). Confidence floor is only meaningful if the model exposes calibrated
   probabilities.
 
+### 2.9 Confidence-based action thresholds (Phase 8 bonus — `CONFIDENCE_GATING_ENABLED`)
+
+The static **confidence floor** (§2.3) watches only the *mean* confidence, which a degrading model
+can keep healthy-looking while a growing tail of predictions drifts toward the decision boundary.
+When `CONFIDENCE_GATING_ENABLED=true` the agent adds a second, leading confidence channel:
+
+- `prediction_probe.py` computes `low_confidence_ratio` — the share of a tick's predictions whose
+  confidence falls below `LOW_CONFIDENCE_CUTOFF` (default `0.60`).
+- `threshold_detector.py` emits a `low_confidence_ratio` `DetectionResult` once that share crosses
+  `LOW_CONFIDENCE_RATIO_MED` (default `0.20`); the raw ratio rides on `score`.
+- `severity_classifier.py` bands it: `>= LOW_CONFIDENCE_RATIO_HIGH` (default `0.40`) → **HIGH**,
+  `>= …_MED` → **MEDIUM**. HIGH feeds the same confirm-N / cooldown gate as any other signal, so a
+  confidence collapse can drive an autonomous switch without a hard error-rate or latency breach.
+
+The flag defaults **off**, so the Phase 7 baseline is unchanged; the mean-confidence band edges were
+also lifted into config (`CONFIDENCE_NOTABLE_FLOOR`, `CONFIDENCE_MED_FLOOR`) with their previous
+values as defaults.
+
 ---
 
 ## 3. Anomaly Detection — `anomaly_detector.py`

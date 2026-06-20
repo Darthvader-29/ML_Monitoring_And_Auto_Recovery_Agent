@@ -25,6 +25,10 @@ class PredictionProbe:
     inference_failure_rate: float
     sample_prediction: float | None = None
     sample_confidence: float | None = None
+    # Share of returned predictions whose confidence lands in the "uncertain" zone
+    # (< config.low_confidence_cutoff). A leading confidence signal the mean hides;
+    # consumed by the threshold detector when confidence gating is enabled.
+    low_confidence_ratio: float = 0.0
 
 
 def probe_predictions(endpoint_url: str, rows: list[dict]) -> PredictionProbe:
@@ -52,6 +56,11 @@ def probe_predictions(endpoint_url: str, rows: list[dict]) -> PredictionProbe:
 
     avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
     fail_rate = failed / attempted if attempted else 0.0
+    cutoff = config.settings.low_confidence_cutoff
+    low_conf_ratio = (
+        sum(1 for c in confidences if c < cutoff) / len(confidences)
+        if confidences else 0.0
+    )
     return PredictionProbe(
         attempted=attempted,
         failed=failed,
@@ -59,4 +68,5 @@ def probe_predictions(endpoint_url: str, rows: list[dict]) -> PredictionProbe:
         inference_failure_rate=fail_rate,
         sample_prediction=sample_pred,
         sample_confidence=sample_conf,
+        low_confidence_ratio=low_conf_ratio,
     )

@@ -17,7 +17,6 @@ from schemas import DetectionResult, Severity
 _RANK = {Severity.LOW: 1, Severity.MEDIUM: 2, Severity.HIGH: 3, Severity.CRITICAL: 4}
 
 _P95_LOW, _P95_MED = 150.0, 300.0
-_CONF_MED = 0.70
 _DRIFT_SHARE_MED = 0.30   # share of features drifted => MED (detection_methods.md §4.7)
 _DRIFT_SHARE_HIGH = 0.50
 
@@ -42,7 +41,14 @@ def _classify_threshold(d: DetectionResult) -> Severity:
     if d.metric == "avg_confidence":
         if v < s.confidence_floor:
             return Severity.HIGH
-        if v < _CONF_MED:
+        if v < s.confidence_med_floor:
+            return Severity.MEDIUM
+        return Severity.LOW
+    if d.metric == "low_confidence_ratio":
+        # Confidence-based action threshold (Phase 8 bonus): higher share is worse.
+        if v >= s.low_confidence_ratio_high:
+            return Severity.HIGH
+        if v >= s.low_confidence_ratio_med:
             return Severity.MEDIUM
         return Severity.LOW
     if d.metric == "service_up":

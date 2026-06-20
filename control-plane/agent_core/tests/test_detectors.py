@@ -1,4 +1,8 @@
 """Unit tests for the three detectors (detection_methods.md / roadmap §6)."""
+import dataclasses
+from contextlib import contextmanager
+
+import config
 from detection import threshold_detector
 from detection.anomaly_detector import AnomalyDetector
 from detection.drift_detector import DriftDetector
@@ -10,6 +14,17 @@ def _metrics(**kw) -> MetricSnapshot:
     base = dict(model_name="model_a", model_version="1.0.0")
     base.update(kw)
     return MetricSnapshot(**base)
+
+
+@contextmanager
+def _settings(**overrides):
+    """Temporarily override the frozen config singleton (read at call-time)."""
+    original = config.settings
+    config.settings = dataclasses.replace(original, **overrides)
+    try:
+        yield
+    finally:
+        config.settings = original
 
 
 # ---- threshold ----------------------------------------------------------
@@ -34,6 +49,40 @@ def test_threshold_flags_service_down():
         None, reachable=False, health_status=HealthStatus.UNHEALTHY,
         consecutive_health_failures=2, inference_failure_rate=1.0)
     assert any(d.metric == "service_up" for d in res)
+
+
+# ---- confidence-based action thresholds (Phase 8 bonus, flag-gated) ------
+
+def test_low_confidence_ratio_silent_when_gating_disabled():
+    """Default behaviour (flag off): a high uncertain share emits no signal."""
+    res = threshold_detector.detect(
+        _metrics(error_rate=0.0, p95_latency_ms=20, avg_confidence=0.9),
+        reachable=True, health_status=HealthStatus.HEALTHY,
+        consecutive_health_failures=0, inference_failure_rate=0.0,
+        low_confidence_ratio=0.9)
+    assert not any(d.metric == "low_confidence_ratio" for d in res)
+
+
+def test_low_confidence_ratio_fires_high_when_gating_enabled():
+    with _settings(confidence_gating_enabled=True,
+                   low_confidence_ratio_med=0.20, low_confidence_ratio_high=0.40):
+        res = threshold_detector.detect(
+            _metrics(error_rate=0.0, p95_latency_ms=20, avg_confidence=0.9),
+            reachable=True, health_status=HealthStatus.HEALTHY,
+            consecutive_health_failures=0, inference_failure_rate=0.0,
+            low_confidence_ratio=0.5)
+    sig = [d for d in res if d.metric == "low_confidence_ratio"]
+    assert sig and sig[0].anomaly_detected and sig[0].score == 0.5
+
+
+def test_low_confidence_ratio_quiet_below_med_edge():
+    with _settings(confidence_gating_enabled=True, low_confidence_ratio_med=0.20):
+        res = threshold_detector.detect(
+            _metrics(error_rate=0.0, p95_latency_ms=20, avg_confidence=0.9),
+            reachable=True, health_status=HealthStatus.HEALTHY,
+            consecutive_health_failures=0, inference_failure_rate=0.0,
+            low_confidence_ratio=0.10)
+    assert not any(d.metric == "low_confidence_ratio" for d in res)
 
 
 # ---- anomaly ------------------------------------------------------------
