@@ -53,17 +53,34 @@ def test_health_check_recovered(monkeypatch):
 
 
 def test_health_check_collapsed_confidence_not_recovered(monkeypatch):
-    """A fully-collapsed confidence of 0.0 must NOT pass verification, even though
-    it is falsy (regression for the `not post_conf` bug)."""
+    """A model that HAS served traffic but collapsed to 0.0 confidence must NOT pass
+    verification, even though 0.0 is falsy (regression for the `not post_conf` bug)."""
     from monitoring import model_probe
     from schemas import MetricSnapshot
     monkeypatch.setattr(model_probe, "probe_health", lambda url: model_probe.HealthProbe(
         reachable=True, status=HealthStatus.HEALTHY, model_loaded=True))
     monkeypatch.setattr(model_probe, "probe_metrics", lambda url, name: MetricSnapshot(
-        model_name=name, model_version="1.0.0", error_rate=0.0, avg_confidence=0.0))
+        model_name=name, model_version="1.0.0", request_count=100,
+        error_rate=0.0, avg_confidence=0.0))
     with _settings(verify_retries=1):  # single probe -> no backoff sleep
         v = health_check.verify("model_b", "http://b")
     assert v.recovered is False
+
+
+def test_health_check_fresh_backup_without_traffic_is_recovered(monkeypatch):
+    """A just-promoted, healthy backup that has served NO requests (request_count=0,
+    so its 0.0 confidence/error are 'no data', not failure) must count as recovered
+    on its health status — otherwise the agent flaps A->B->A forever."""
+    from monitoring import model_probe
+    from schemas import MetricSnapshot
+    monkeypatch.setattr(model_probe, "probe_health", lambda url: model_probe.HealthProbe(
+        reachable=True, status=HealthStatus.HEALTHY, model_loaded=True))
+    monkeypatch.setattr(model_probe, "probe_metrics", lambda url, name: MetricSnapshot(
+        model_name=name, model_version="1.0.0", request_count=0,
+        error_rate=0.0, avg_confidence=0.0))
+    with _settings(verify_retries=1):
+        v = health_check.verify("model_b", "http://b")
+    assert v.recovered is True
 
 
 def test_health_check_recovers_after_retry(monkeypatch):
