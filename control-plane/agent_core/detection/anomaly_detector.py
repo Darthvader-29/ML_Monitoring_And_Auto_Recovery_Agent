@@ -81,7 +81,12 @@ class AnomalyDetector:
                 continue
             pattern = "sustained" if self._consec[metric] >= N_SUSTAIN else "spike"
             results.append(DetectionResult(
-                detector=_DET, anomaly_detected=True, metric="robust_zscore_spike",
+                detector=_DET, anomaly_detected=True,
+                # Carry the actual offending metric + the method/pattern that fired,
+                # instead of a hardcoded "robust_zscore_spike" that lied when the
+                # breach came from IQR/EWMA or was a *sustained* shift, and erased
+                # which metric (error_rate vs latency vs confidence) tripped.
+                metric=f"{metric}_{pattern}",
                 observed=round(float(value), 6), threshold=K_R, score=round(score, 4),
                 message=f"{method} on {metric}={value:.4g} pattern={pattern} "
                         f"(consec={self._consec[metric]})",

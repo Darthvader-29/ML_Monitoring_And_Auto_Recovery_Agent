@@ -1,9 +1,13 @@
 """DRF serializers for actions_app (api_contracts.md §B.3)."""
 from __future__ import annotations
 
+from django.conf import settings
 from rest_framework import serializers
 
 from .models import ActionLog
+
+# Raw operational metric blobs hidden when EXPOSE_INTERNAL_TOPOLOGY is False.
+_INTERNAL_METRIC_FIELDS = ("before_metrics", "after_metrics")
 
 
 class ActionLogSerializer(serializers.ModelSerializer):
@@ -18,6 +22,13 @@ class ActionLogSerializer(serializers.ModelSerializer):
                   "decided_at", "executed_at", "outcome", "jenkins_build_id",
                   "before_metrics", "after_metrics", "is_reversible",
                   "reverted_by", "verification"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not getattr(settings, "EXPOSE_INTERNAL_TOPOLOGY", True):
+            for field in _INTERNAL_METRIC_FIELDS:
+                data.pop(field, None)
+        return data
 
     def get_verification(self, obj):
         v = getattr(obj, "verification", None)

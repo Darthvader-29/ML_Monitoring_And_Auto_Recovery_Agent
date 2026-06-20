@@ -26,7 +26,10 @@ def verify(model_name: str, endpoint_url: str,
 
     healthy = health.reachable and health.status == HealthStatus.HEALTHY
     error_ok = post_error is None or post_error <= s.error_rate_threshold
-    conf_ok = not post_conf or post_conf >= s.confidence_floor
+    # Only a *missing* metric (None) may skip the confidence gate. A collapsed
+    # confidence of 0.0 is falsy but must NOT count as recovered — using
+    # `not post_conf` here let a fully-collapsed model pass verification.
+    conf_ok = post_conf is None or post_conf >= s.confidence_floor
     recovered = healthy and error_ok and conf_ok
 
     return VerificationResult(

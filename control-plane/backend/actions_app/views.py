@@ -20,12 +20,36 @@ _ACTION_MAP = {
     "no_op": "NO_OP", "alert": "ALERT", "switch_backup": "SWITCH",
     "rollback": "ROLLBACK", "retrain": "RETRAIN", "disable_predictions": "DISABLE",
 }
-_OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS",
-                "failed": "FAILED", "skipped": "SUCCESS", "reverted": "REVERTED"}
+# A skipped action did NOT succeed (e.g. target already active) — it must map to
+# its own SKIPPED outcome, not be silently recorded as SUCCESS in the audit trail.
+_OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
+                "skipped": "SKIPPED", "reverted": "REVERTED"}
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
+
+_DEFAULT_LIMIT, _MAX_LIMIT = 50, 500
+
+
+def _parse_limit(request) -> int:
+    """A safe `?limit`: non-integer/negative falls back to the default, and the
+    value is capped so a caller cannot pull the whole table (or crash the view
+    with a negative slice)."""
+    raw = request.query_params.get("limit", _DEFAULT_LIMIT)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_LIMIT
+    return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
+# Actions the agent can automatically undo: a traffic SWITCH can be switched back,
+# a ROLLBACK re-applied, DISABLE re-enabled. NO_OP/ALERT have nothing to revert and
+# RETRAIN is not cleanly reversible. (The old `action in _NONTRIVIAL or action in
+# ("NO_OP","ALERT")` covered every action, so the flag was always True.)
+_REVERSIBLE = {"SWITCH", "ROLLBACK", "DISABLE"}
 
 
 def _resolve_version(model_name: str) -> ModelVersion:
+    # Normalize so a stray-whitespace typo ("model_a " vs "model_a") resolves to the
+    # SAME registry row instead of materializing a phantom Model/ModelVersion.
+    model_name = str(model_name).strip()
     model, _ = Model.objects.get_or_create(model_name=model_name)
     mv = model.versions.order_by("-created_at").first()
     if mv is None:
@@ -48,7 +72,7 @@ class ActionsView(APIView):
     def post(self, request):
         d = request.data or {}
         action = _ACTION_MAP.get(str(d.get("action", "no_op")), "NO_OP")
-        target = d.get("target_model") or "model_a"
+        target = (str(d.get("target_model") or "").strip()) or "model_a"
         version = _resolve_version(target)
         severity = str(d.get("severity", "LOW")).upper()
         incident = _incident_for(version, severity)
@@ -58,7 +82,7 @@ class ActionsView(APIView):
             severity=severity, reason=d.get("reason", ""),
             outcome=_OUTCOME_MAP.get(str(d.get("outcome", "pending")), "PENDING"),
             before_metrics={"detection_signal": d.get("detection_signal")},
-            is_reversible=action in _NONTRIVIAL or action in ("NO_OP", "ALERT"),
+            is_reversible=action in _REVERSIBLE,
         )
         if action in _NONTRIVIAL:
             incident.status = "RECOVERING"
@@ -71,7 +95,7 @@ class ActionsView(APIView):
         if request.query_params.get("action"):
             qs = qs.filter(action=_ACTION_MAP.get(request.query_params["action"],
                                                   request.query_params["action"]))
-        qs = qs[:int(request.query_params.get("limit", 50))]
+        qs = qs[:_parse_limit(request)]
         return Response(ActionLogSerializer(qs, many=True).data)
 
 
@@ -85,7 +109,12 @@ class ActionDetailView(APIView):
         d = request.data or {}
         if "outcome" in d:
             log.outcome = _OUTCOME_MAP.get(str(d["outcome"]), log.outcome)
-        log.executed_at = timezone.now()
+        # Stamp execution time only when an outcome is actually being recorded, and
+        # only once — re-PATCHing (e.g. a later verification update) must not move
+        # an already-executed action's timestamp forward, nor fabricate one for a
+        # verification-only call. This keeps the append-only audit timeline honest.
+        if "outcome" in d and log.executed_at is None:
+            log.executed_at = timezone.now()
         if "after_metrics" in d:
             log.after_metrics = d["after_metrics"]
         log.save()
@@ -99,9 +128,16 @@ class ActionDetailView(APIView):
                 action=log, defaults={
                     "success": recovered, "decision": decision,
                     "post_metrics": ver})
-            # Close the incident on a verified recovery / escalation.
+            # Three-way close: KEEP -> RESOLVED, ESCALATE -> ESCALATED (both
+            # terminal). A REVERT means the recovery failed and was undone — the
+            # incident is NOT resolved; keep it open (RECOVERING) so the loop can
+            # try again, rather than force-closing it as ESCALATED.
             inc = log.incident
-            inc.status = "RESOLVED" if recovered else "ESCALATED"
-            inc.closed_at = timezone.now()
+            if decision == "KEEP":
+                inc.status, inc.closed_at = "RESOLVED", timezone.now()
+            elif decision == "ESCALATE":
+                inc.status, inc.closed_at = "ESCALATED", timezone.now()
+            else:  # REVERT
+                inc.status, inc.closed_at = "RECOVERING", None
             inc.save(update_fields=["status", "closed_at"])
         return Response(ActionLogSerializer(log).data)

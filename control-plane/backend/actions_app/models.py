@@ -47,7 +47,7 @@ class ActionLog(models.Model):
     ]
     SEVERITY = Incident.SEVERITY
     OUTCOME = [("PENDING", "Pending"), ("SUCCESS", "Success"),
-               ("FAILED", "Failed"), ("REVERTED", "Reverted")]
+               ("FAILED", "Failed"), ("SKIPPED", "Skipped"), ("REVERTED", "Reverted")]
 
     incident = models.ForeignKey(Incident, on_delete=models.PROTECT, related_name="actions")
     model_version = models.ForeignKey(ModelVersion, on_delete=models.PROTECT,

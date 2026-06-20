@@ -136,10 +136,13 @@ class Settings:
     low_confidence_ratio_med: float      # uncertain share >= this => MEDIUM
     low_confidence_ratio_high: float     # uncertain share >= this => HIGH
 
-    # --- Feature schema (api_contracts.md §A) — used by data_loader / probes
+    # --- Feature schema (data_simulation.md §2.1) — the real 8-feature Transaction
+    #     Risk schema (6 numeric + 2 categorical), matching data_loader/drift_detector
+    #     and the model services. The previous ("feature_1".."feature_6") tuple was a
+    #     stale 6-name placeholder that matched nothing the agent actually sends.
     feature_names: tuple[str, ...] = field(
-        default=("feature_1", "feature_2", "feature_3",
-                 "feature_4", "feature_5", "feature_6")
+        default=("amount", "account_age_days", "num_txn_24h", "avg_txn_amount",
+                 "time_since_last_min", "device_risk", "country", "channel")
     )
 
 
