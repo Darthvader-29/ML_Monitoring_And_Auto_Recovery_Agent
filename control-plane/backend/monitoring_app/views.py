@@ -14,6 +14,19 @@ from .serializers import MetricSnapshotSerializer
 # agent health string (healthy/degraded/unhealthy) -> DB enum
 _HEALTH_MAP = {"healthy": "HEALTHY", "degraded": "DEGRADED", "unhealthy": "UNHEALTHY"}
 
+_DEFAULT_LIMIT, _MAX_LIMIT = 50, 500
+
+
+def _parse_limit(request) -> int:
+    """A safe `?limit`: non-integer/negative falls back to the default, capped so a
+    caller cannot pull the whole table or crash the view with a negative slice."""
+    raw = request.query_params.get("limit", _DEFAULT_LIMIT)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_LIMIT
+    return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
+
 
 def _resolve_version(model_name: str, version: str) -> ModelVersion:
     model, _ = Model.objects.get_or_create(model_name=model_name)
@@ -56,7 +69,7 @@ class MetricsView(APIView):
         model = request.query_params.get("model")
         if model:
             qs = qs.filter(model_version__model__model_name=model)
-        qs = qs[:int(request.query_params.get("limit", 50))]
+        qs = qs[:_parse_limit(request)]
         return Response(MetricSnapshotSerializer(qs, many=True).data)
 
 

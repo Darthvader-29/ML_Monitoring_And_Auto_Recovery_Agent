@@ -25,6 +25,20 @@ _ACTION_MAP = {
 _OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
                 "skipped": "SKIPPED", "reverted": "REVERTED"}
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
+
+_DEFAULT_LIMIT, _MAX_LIMIT = 50, 500
+
+
+def _parse_limit(request) -> int:
+    """A safe `?limit`: non-integer/negative falls back to the default, and the
+    value is capped so a caller cannot pull the whole table (or crash the view
+    with a negative slice)."""
+    raw = request.query_params.get("limit", _DEFAULT_LIMIT)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_LIMIT
+    return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
 # Actions the agent can automatically undo: a traffic SWITCH can be switched back,
 # a ROLLBACK re-applied, DISABLE re-enabled. NO_OP/ALERT have nothing to revert and
 # RETRAIN is not cleanly reversible. (The old `action in _NONTRIVIAL or action in
@@ -78,7 +92,7 @@ class ActionsView(APIView):
         if request.query_params.get("action"):
             qs = qs.filter(action=_ACTION_MAP.get(request.query_params["action"],
                                                   request.query_params["action"]))
-        qs = qs[:int(request.query_params.get("limit", 50))]
+        qs = qs[:_parse_limit(request)]
         return Response(ActionLogSerializer(qs, many=True).data)
 
 
