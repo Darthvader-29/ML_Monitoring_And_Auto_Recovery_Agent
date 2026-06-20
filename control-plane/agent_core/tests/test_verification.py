@@ -36,3 +36,16 @@ def test_health_check_recovered(monkeypatch):
         model_name=name, model_version="1.0.0", error_rate=0.0, avg_confidence=0.9))
     v = health_check.verify("model_b", "http://b")
     assert v.recovered is True
+
+
+def test_health_check_collapsed_confidence_not_recovered(monkeypatch):
+    """A fully-collapsed confidence of 0.0 must NOT pass verification, even though
+    it is falsy (regression for the `not post_conf` bug)."""
+    from monitoring import model_probe
+    from schemas import MetricSnapshot
+    monkeypatch.setattr(model_probe, "probe_health", lambda url: model_probe.HealthProbe(
+        reachable=True, status=HealthStatus.HEALTHY, model_loaded=True))
+    monkeypatch.setattr(model_probe, "probe_metrics", lambda url, name: MetricSnapshot(
+        model_name=name, model_version="1.0.0", error_rate=0.0, avg_confidence=0.0))
+    v = health_check.verify("model_b", "http://b")
+    assert v.recovered is False
