@@ -97,3 +97,20 @@ class MetricExposureTests(TestCase):
             "verification": {"recovered": True, "model_checked": "model_b"}}),
             content_type="application/json")
         self.assertEqual(ActionLog.objects.get(pk=aid).executed_at, first)
+
+    def test_revert_verdict_keeps_incident_open(self):
+        c = Client()
+        aid = c.post("/api/actions", data=json.dumps({
+            "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
+            "reason": "x", "outcome": "pending"}),
+            content_type="application/json").json()["id"]
+        # recovered=False, escalate=False -> REVERT
+        c.patch(f"/api/actions/{aid}", data=json.dumps({
+            "outcome": "failed",
+            "verification": {"recovered": False, "escalate_to_human": False,
+                             "model_checked": "model_b"}}),
+            content_type="application/json")
+        self.assertEqual(VerificationResult.objects.get().decision, "REVERT")
+        inc = Incident.objects.get()
+        self.assertEqual(inc.status, "RECOVERING")   # NOT escalated/closed
+        self.assertIsNone(inc.closed_at)

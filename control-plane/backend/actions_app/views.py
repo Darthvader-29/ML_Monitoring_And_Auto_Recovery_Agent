@@ -111,9 +111,16 @@ class ActionDetailView(APIView):
                 action=log, defaults={
                     "success": recovered, "decision": decision,
                     "post_metrics": ver})
-            # Close the incident on a verified recovery / escalation.
+            # Three-way close: KEEP -> RESOLVED, ESCALATE -> ESCALATED (both
+            # terminal). A REVERT means the recovery failed and was undone — the
+            # incident is NOT resolved; keep it open (RECOVERING) so the loop can
+            # try again, rather than force-closing it as ESCALATED.
             inc = log.incident
-            inc.status = "RESOLVED" if recovered else "ESCALATED"
-            inc.closed_at = timezone.now()
+            if decision == "KEEP":
+                inc.status, inc.closed_at = "RESOLVED", timezone.now()
+            elif decision == "ESCALATE":
+                inc.status, inc.closed_at = "ESCALATED", timezone.now()
+            else:  # REVERT
+                inc.status, inc.closed_at = "RECOVERING", None
             inc.save(update_fields=["status", "closed_at"])
         return Response(ActionLogSerializer(log).data)
