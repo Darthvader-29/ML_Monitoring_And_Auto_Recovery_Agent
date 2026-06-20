@@ -12,8 +12,9 @@ The authoritative design lives in [`docs/`](./docs) (start with
 
 ## Status
 
-Phases 0–7 of the roadmap are implemented and tested (the full Definition of Done);
-Phase 8 (bonus/stretch) is optional and not yet built.
+Phases 0–7 of the roadmap are implemented and tested (the full Definition of Done).
+Phase 8 (bonus/stretch) is optional and in progress — the first item is built behind
+a flag; the rest are not yet started.
 
 | Phase | What | State |
 |-------|------|-------|
@@ -24,7 +25,8 @@ Phase 8 (bonus/stretch) is optional and not yet built.
 | 4 | Django + DRF control plane: registry, metrics, audit (survives restart) | ✅ |
 | 5 | Jenkins recovery executor + Docker packaging (direct stays the default) | ✅ |
 | 6 | Read-only operator dashboard (health / drift / action timeline) | ✅ |
-| 7 | Test matrix (30 tests) + client retry/backoff + anti-flap | ✅ |
+| 7 | Test matrix (34 tests) + client retry/backoff + anti-flap | ✅ |
+| 8 | Bonus — confidence-based action thresholds (`CONFIDENCE_GATING_ENABLED`, off by default) | 🔶 1/5 |
 
 ## Architecture
 

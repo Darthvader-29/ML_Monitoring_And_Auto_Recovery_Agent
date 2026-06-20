@@ -64,6 +64,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 # ---- Settings -----------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -111,6 +118,23 @@ class Settings:
     drift_psi_threshold: float           # PSI > 0.3 => HIGH
     drift_ks_p_threshold: float          # KS p-value < 0.001 => HIGH
     accuracy_floor: float                # accuracy < 0.80 => HIGH (concept drift)
+
+    # --- Confidence band edges (used by threshold_detector + severity_classifier).
+    #     Mean confidence at/under `notable` is worth a LOW signal; under `med_floor`
+    #     is MEDIUM; under `confidence_floor` (above) is HIGH. Kept here so all the
+    #     confidence cut-points live in one tunable place.
+    confidence_notable_floor: float      # mean confidence <= 0.78 => notable (LOW)
+    confidence_med_floor: float          # mean confidence <  0.70 => MEDIUM
+
+    # --- Confidence-based action thresholds (Phase 8 bonus, OFF by default).
+    #     A leading signal the mean hides: the SHARE of predictions whose confidence
+    #     lands in the "uncertain" zone (below `low_confidence_cutoff`). A model
+    #     degrading toward the decision boundary grows this tail while its mean still
+    #     looks healthy. When enabled the agent emits a `low_confidence_ratio` signal.
+    confidence_gating_enabled: bool      # master flag for the bonus
+    low_confidence_cutoff: float         # a single prediction < this is "uncertain"
+    low_confidence_ratio_med: float      # uncertain share >= this => MEDIUM
+    low_confidence_ratio_high: float     # uncertain share >= this => HIGH
 
     # --- Feature schema (api_contracts.md §A) — used by data_loader / probes
     feature_names: tuple[str, ...] = field(
@@ -163,6 +187,14 @@ def load_settings() -> Settings:
         drift_psi_threshold=_env_float("DRIFT_PSI_THRESHOLD", 0.30),
         drift_ks_p_threshold=_env_float("DRIFT_KS_P_THRESHOLD", 0.001),
         accuracy_floor=_env_float("ACCURACY_FLOOR", 0.80),
+
+        confidence_notable_floor=_env_float("CONFIDENCE_NOTABLE_FLOOR", 0.78),
+        confidence_med_floor=_env_float("CONFIDENCE_MED_FLOOR", 0.70),
+
+        confidence_gating_enabled=_env_bool("CONFIDENCE_GATING_ENABLED", False),
+        low_confidence_cutoff=_env_float("LOW_CONFIDENCE_CUTOFF", 0.60),
+        low_confidence_ratio_med=_env_float("LOW_CONFIDENCE_RATIO_MED", 0.20),
+        low_confidence_ratio_high=_env_float("LOW_CONFIDENCE_RATIO_HIGH", 0.40),
     )
 
 

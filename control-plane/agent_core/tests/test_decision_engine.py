@@ -21,6 +21,16 @@ def test_severity_worst_wins_across_signals():
     assert sev == Severity.HIGH
 
 
+def test_low_confidence_ratio_severity_bands():
+    # Phase 8 bonus: share of uncertain predictions bands on its raw ratio (score).
+    high = DetectionResult(detector="threshold_detector", anomaly_detected=True,
+                           metric="low_confidence_ratio", observed=0.5)
+    med = DetectionResult(detector="threshold_detector", anomaly_detected=True,
+                          metric="low_confidence_ratio", observed=0.25)
+    assert severity_classifier.classify_detection(high) == Severity.HIGH
+    assert severity_classifier.classify_detection(med) == Severity.MEDIUM
+
+
 def test_drift_aggregate_severity():
     agg_high = DetectionResult(detector="drift_detector", anomaly_detected=True,
                                metric="data_drift_aggregate", score=0.5)
