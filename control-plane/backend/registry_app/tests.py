@@ -30,3 +30,20 @@ class RegistryTests(TestCase):
                       content_type="application/json")
         self.assertEqual(resp.json()["model_name"], "model_b")
         self.assertEqual(c.get("/api/active-model").json()["model_name"], "model_b")
+
+    def test_auto_select_skips_retired_versions(self):
+        # A STABLE version, then a DEPRECATED one created LATER (newest by created_at).
+        stable = ModelVersion.objects.create(
+            model=self.a.model, version="1.1.0", artifact_path="x",
+            endpoint_url="http://model_a:8003", port=8003, status="STABLE")
+        ModelVersion.objects.create(
+            model=self.a.model, version="2.0.0", artifact_path="x",
+            endpoint_url="http://model_a:8004", port=8004, status="DEPRECATED")
+        c = Client()
+        resp = c.post("/api/active-model",
+                      data=json.dumps({"model_name": "model_a", "reason": "promote stable"}),
+                      content_type="application/json")
+        body = resp.json()
+        # The STABLE version is chosen, not the newer DEPRECATED one.
+        self.assertEqual(body["version"], stable.version)
+        self.assertEqual(body["reason"], "promote stable")
