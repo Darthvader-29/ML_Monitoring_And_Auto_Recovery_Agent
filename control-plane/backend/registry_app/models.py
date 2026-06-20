@@ -60,8 +60,8 @@ class ModelVersion(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["model", "version"],
                                     name="uq_modelversion_model_version"),
-            models.UniqueConstraint(fields=["model"], condition=models.Q(is_active=True),
-                                    name="uq_one_active_version_per_model"),
+            models.UniqueConstraint(fields=["is_active"], condition=models.Q(is_active=True),
+                                    name="uq_one_global_active_version"),
         ]
 
     def __str__(self) -> str:

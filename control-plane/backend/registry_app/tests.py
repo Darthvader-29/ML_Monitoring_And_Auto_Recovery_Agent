@@ -1,6 +1,7 @@
 """Tests for the registry: atomic single-active invariant + /api/active-model."""
 import json
 
+from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 
 from .models import ActiveModelPointer, Model, ModelVersion
@@ -21,6 +22,17 @@ class RegistryTests(TestCase):
         self.assertEqual(ModelVersion.objects.filter(is_active=True).count(), 1)
         self.assertTrue(ModelVersion.objects.get(pk=self.b.pk).is_active)
         self.assertFalse(ModelVersion.objects.get(pk=self.a.pk).is_active)
+
+    def test_db_rejects_second_direct_active(self):
+        """The DB enforces a single globally-active version even when is_active is
+        written directly (bypassing switch_to)."""
+        self.a.is_active = True
+        self.a.save(update_fields=["is_active"])
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.b.is_active = True
+                self.b.save(update_fields=["is_active"])
+        self.assertEqual(ModelVersion.objects.filter(is_active=True).count(), 1)
 
     def test_active_model_endpoint_flip(self):
         ActiveModelPointer.switch_to(self.a)
