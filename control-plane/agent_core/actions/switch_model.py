@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 
-import config
 from schemas import ActionResult, ActionType, Decision, Outcome
+
+from actions.executors import make_executor
 
 log = logging.getLogger("agent.actions")
 
@@ -36,19 +37,17 @@ def execute(decision: Decision, runtime, django_client=None) -> ActionResult:
             executed=False, outcome=Outcome.SKIPPED, message="target already active",
         )
 
-    build_number = build_url = None
-    if config.settings.executor_type == "jenkins":
-        # Jenkins executor (Phase 5): delegate the mutation to the recovery job.
-        # Same interface as direct; on Jenkins failure we do NOT flip and report it,
-        # so the decision engine can escalate rather than leave a half-switch.
-        ok, build_number, build_url = _run_via_jenkins(target, decision.reason)
-        if not ok:
-            return ActionResult(
-                action=ActionType.SWITCH_BACKUP, target_model=target,
-                executed=False, outcome=Outcome.FAILED,
-                jenkins_build_number=build_number, jenkins_build_url=build_url,
-                message=f"jenkins switch to {target} failed",
-            )
+    # Delegate the mutation to the configured executor (direct / jenkins / …). On
+    # failure we do NOT flip and report it, so the engine can escalate rather than
+    # leave a half-switch.
+    res = make_executor().switch(target, decision.reason)
+    if not res.ok:
+        return ActionResult(
+            action=ActionType.SWITCH_BACKUP, target_model=target,
+            executed=False, outcome=Outcome.FAILED,
+            jenkins_build_number=res.build_number, jenkins_build_url=res.build_url,
+            message=f"executor switch to {target} failed",
+        )
 
     # Flip the in-memory active pointer and mirror it into the Django registry.
     runtime.previous_model = previous
@@ -60,16 +59,6 @@ def execute(decision: Decision, runtime, django_client=None) -> ActionResult:
     return ActionResult(
         action=ActionType.SWITCH_BACKUP, target_model=target,
         executed=True, outcome=Outcome.PENDING,
-        jenkins_build_number=build_number, jenkins_build_url=build_url,
+        jenkins_build_number=res.build_number, jenkins_build_url=res.build_url,
         message=f"switched {previous} -> {target}",
     )
-
-
-def _run_via_jenkins(target: str, reason: str):
-    """Trigger the switch_active_model Jenkins job; return (ok, build_no, build_url)."""
-    from clients.jenkins_client import JenkinsClient
-    job = config.settings.jenkins_job_switch
-    result = JenkinsClient().run_job(job, {
-        "TARGET_MODEL": target, "ACTION": "switch", "REASON": reason})
-    log.warning("jenkins %s: %s", job, result.message)
-    return result.success, result.build_number, result.build_url

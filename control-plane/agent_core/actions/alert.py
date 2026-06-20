@@ -13,7 +13,9 @@ from schemas import ActionResult, Decision, Outcome
 log = logging.getLogger("agent.actions")
 
 
-def execute(decision: Decision) -> ActionResult:
+def execute(decision: Decision, runtime=None, django_client=None) -> ActionResult:
+    # Uniform handler signature (runtime/django_client unused here) so every action
+    # is dispatchable through a single registry — see actions/dispatch.py.
     log.warning("ALERT [%s] %s", decision.severity.value, decision.reason)
     return ActionResult(
         action=decision.action, target_model=decision.target_model,

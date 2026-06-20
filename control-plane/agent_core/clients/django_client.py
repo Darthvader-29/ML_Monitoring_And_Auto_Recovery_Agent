@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Protocol
 
 import requests
 
@@ -21,6 +21,19 @@ import config
 from schemas import ActionResult, Decision, MetricSnapshot, Outcome, VerificationResult
 
 log = logging.getLogger("agent.clients.django")
+
+
+class DjangoClientProtocol(Protocol):
+    """The control-plane client contract the agent loop depends on. Both
+    `DjangoClient` and `NullDjangoClient` satisfy it, and `run()` accepts any
+    implementation (so tests can inject a fake — see test_loop_scenarios)."""
+
+    def post_metrics(self, snapshot: MetricSnapshot, **kw) -> None: ...
+    def get_active_model(self) -> Optional[str]: ...
+    def set_active_model(self, model_name: str, reason: str = "") -> None: ...
+    def post_action(self, decision: Decision, result: ActionResult) -> Optional[int]: ...
+    def patch_action(self, action_id: Optional[int],
+                     verification: VerificationResult) -> None: ...
 
 _TIMEOUT = (config.settings.http_connect_timeout_seconds,
             config.settings.http_read_timeout_seconds)
