@@ -16,9 +16,14 @@ _RANK = {Severity.LOW: 1, Severity.MEDIUM: 2, Severity.HIGH: 3, Severity.CRITICA
 
 
 def _worst(detections: list[DetectionResult]) -> Optional[DetectionResult]:
-    if not detections:
+    # Only consider signals that actually breached. Detectors emit non-breaching
+    # rows too (e.g. the clean data_drift_aggregate with anomaly_detected=False);
+    # without this filter one of those could be attached as the Decision's
+    # detection_signal, misrepresenting why the agent acted.
+    breaching = [d for d in detections if d.anomaly_detected]
+    if not breaching:
         return None
-    return max(detections, key=lambda d: _RANK[severity_classifier.classify_detection(d)])
+    return max(breaching, key=lambda d: _RANK[severity_classifier.classify_detection(d)])
 
 
 def make_decision(
