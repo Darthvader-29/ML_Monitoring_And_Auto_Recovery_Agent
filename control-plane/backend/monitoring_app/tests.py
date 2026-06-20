@@ -26,3 +26,15 @@ class MetricsTests(TestCase):
                 {"model_name": "model_a", "model_version": "1.0.0"}),
                 content_type="application/json")
         self.assertEqual(len(c.get("/api/metrics").json()), 3)
+
+    def test_limit_param_is_validated(self):
+        c = Client()
+        for _ in range(3):
+            c.post("/api/metrics", data=json.dumps(
+                {"model_name": "model_a", "model_version": "1.0.0"}),
+                content_type="application/json")
+        # non-integer -> falls back to default (no 500)
+        self.assertEqual(c.get("/api/metrics?limit=abc").status_code, 200)
+        # negative -> default, no crash
+        self.assertEqual(c.get("/api/metrics?limit=-5").status_code, 200)
+        self.assertEqual(len(c.get("/api/metrics?limit=2").json()), 2)
