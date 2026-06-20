@@ -57,3 +57,18 @@ class MetricsTests(TestCase):
         ts = MetricSnapshot.objects.first().timestamp
         self.assertFalse(tz.is_naive(ts))
         self.assertEqual(ts.year, 2026)
+
+    def test_whitespace_typo_does_not_create_phantom_model(self):
+        from registry_app.models import Model
+        c = Client()
+        c.post("/api/metrics", data=json.dumps({"model_name": "model_a"}),
+               content_type="application/json")
+        c.post("/api/metrics", data=json.dumps({"model_name": " model_a "}),
+               content_type="application/json")
+        # Both resolve to the same registry row, not two phantoms.
+        self.assertEqual(Model.objects.filter(model_name="model_a").count(), 1)
+        self.assertEqual(Model.objects.count(), 1)
+
+    def test_whitespace_only_name_rejected(self):
+        self.assertEqual(Client().post("/api/metrics", data=json.dumps(
+            {"model_name": "   "}), content_type="application/json").status_code, 400)

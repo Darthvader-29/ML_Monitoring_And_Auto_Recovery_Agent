@@ -47,6 +47,9 @@ _REVERSIBLE = {"SWITCH", "ROLLBACK", "DISABLE"}
 
 
 def _resolve_version(model_name: str) -> ModelVersion:
+    # Normalize so a stray-whitespace typo ("model_a " vs "model_a") resolves to the
+    # SAME registry row instead of materializing a phantom Model/ModelVersion.
+    model_name = str(model_name).strip()
     model, _ = Model.objects.get_or_create(model_name=model_name)
     mv = model.versions.order_by("-created_at").first()
     if mv is None:
@@ -69,7 +72,7 @@ class ActionsView(APIView):
     def post(self, request):
         d = request.data or {}
         action = _ACTION_MAP.get(str(d.get("action", "no_op")), "NO_OP")
-        target = d.get("target_model") or "model_a"
+        target = (str(d.get("target_model") or "").strip()) or "model_a"
         version = _resolve_version(target)
         severity = str(d.get("severity", "LOW")).upper()
         incident = _incident_for(version, severity)

@@ -45,6 +45,9 @@ def _parse_limit(request) -> int:
 
 
 def _resolve_version(model_name: str, version: str) -> ModelVersion:
+    # Normalize so a stray-whitespace typo resolves to the SAME registry row instead
+    # of materializing a phantom Model/ModelVersion.
+    model_name = str(model_name).strip()
     model, _ = Model.objects.get_or_create(model_name=model_name)
     mv, _ = ModelVersion.objects.get_or_create(
         model=model, version=version or "unknown",
@@ -55,7 +58,7 @@ def _resolve_version(model_name: str, version: str) -> ModelVersion:
 class MetricsView(APIView):
     def post(self, request):
         d = request.data or {}
-        model_name = d.get("model_name")
+        model_name = str(d.get("model_name") or "").strip()
         if not model_name:
             return Response({"error": {"code": "validation_error",
                              "message": "model_name required"}},
