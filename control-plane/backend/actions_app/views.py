@@ -20,8 +20,10 @@ _ACTION_MAP = {
     "no_op": "NO_OP", "alert": "ALERT", "switch_backup": "SWITCH",
     "rollback": "ROLLBACK", "retrain": "RETRAIN", "disable_predictions": "DISABLE",
 }
-_OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS",
-                "failed": "FAILED", "skipped": "SUCCESS", "reverted": "REVERTED"}
+# A skipped action did NOT succeed (e.g. target already active) — it must map to
+# its own SKIPPED outcome, not be silently recorded as SUCCESS in the audit trail.
+_OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
+                "skipped": "SKIPPED", "reverted": "REVERTED"}
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
 
 

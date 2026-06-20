@@ -36,6 +36,15 @@ class ActionsTests(TestCase):
         self.assertEqual(v.decision, "KEEP")
         self.assertEqual(Incident.objects.get().status, "RESOLVED")
 
+    def test_skipped_outcome_is_not_recorded_as_success(self):
+        c = Client()
+        resp = c.post("/api/actions", data=json.dumps({
+            "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
+            "reason": "target already active", "outcome": "skipped"}),
+            content_type="application/json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(ActionLog.objects.get().outcome, "SKIPPED")
+
 
 class MetricExposureTests(TestCase):
     """GET /api/actions hides raw operational metric blobs when the flag is off."""
