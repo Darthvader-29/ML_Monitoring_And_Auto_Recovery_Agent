@@ -67,7 +67,14 @@ class MetricsTracker:
         error_rate = error_count / request_count if request_count else 0.0
 
         ok = [s for s in samples if not s.is_error]
-        latencies = sorted(s.latency_ms for s in ok)
+        # Latency stats normally use successful samples. But when EVERY request in
+        # the window errored (or there are no successes), fall back to the error
+        # samples' latencies so a slow/failing service is not reported as 0.0
+        # (monitoring_and_metrics.md §2.1: latency must reflect actual failures).
+        latency_source = ok if ok else samples
+        latencies = sorted(
+            s.latency_ms for s in latency_source if not math.isnan(s.latency_ms)
+        )
         confidences = [s.confidence for s in ok if not math.isnan(s.confidence)]
 
         avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
