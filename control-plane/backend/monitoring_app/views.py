@@ -29,10 +29,6 @@ def _parse_timestamp(value):
     return parsed
 
 
-# agent health string (healthy/degraded/unhealthy) -> DB enum
-_HEALTH_MAP = {"healthy": "HEALTHY", "degraded": "DEGRADED", "unhealthy": "UNHEALTHY"}
-
-
 class MetricsView(APIView):
     def post(self, request):
         d = request.data or {}
@@ -52,8 +48,7 @@ class MetricsView(APIView):
             accuracy=d.get("accuracy"),
             overall_drift_score=float(d.get("overall_drift_score", 0.0)),
             drifted_feature_count=int(d.get("drifted_feature_count", 0)),
-            health_status=_HEALTH_MAP.get(str(d.get("status", "healthy")).lower(),
-                                          "UNKNOWN"),
+            health_status=MetricSnapshot.health_from_agent(d.get("status", "healthy")),
             raw=d if isinstance(d, dict) else {},
         )
         return Response(MetricSnapshotSerializer(snap).data,

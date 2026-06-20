@@ -14,6 +14,13 @@ class MetricSnapshot(models.Model):
         ("UNHEALTHY", "Unhealthy"), ("UNKNOWN", "Unknown"),
     ]
 
+    # Agent health string -> DB enum, co-located with the choices it bridges.
+    _AGENT_HEALTH = {"healthy": "HEALTHY", "degraded": "DEGRADED", "unhealthy": "UNHEALTHY"}
+
+    @classmethod
+    def health_from_agent(cls, value, default: str = "UNKNOWN") -> str:
+        return cls._AGENT_HEALTH.get(str(value).lower(), default)
+
     model_version = models.ForeignKey(ModelVersion, on_delete=models.CASCADE,
                                       related_name="snapshots")
     timestamp = models.DateTimeField(db_index=True)
