@@ -25,6 +25,11 @@ _ACTION_MAP = {
 _OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
                 "skipped": "SKIPPED", "reverted": "REVERTED"}
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
+# Actions the agent can automatically undo: a traffic SWITCH can be switched back,
+# a ROLLBACK re-applied, DISABLE re-enabled. NO_OP/ALERT have nothing to revert and
+# RETRAIN is not cleanly reversible. (The old `action in _NONTRIVIAL or action in
+# ("NO_OP","ALERT")` covered every action, so the flag was always True.)
+_REVERSIBLE = {"SWITCH", "ROLLBACK", "DISABLE"}
 
 
 def _resolve_version(model_name: str) -> ModelVersion:
@@ -60,7 +65,7 @@ class ActionsView(APIView):
             severity=severity, reason=d.get("reason", ""),
             outcome=_OUTCOME_MAP.get(str(d.get("outcome", "pending")), "PENDING"),
             before_metrics={"detection_signal": d.get("detection_signal")},
-            is_reversible=action in _NONTRIVIAL or action in ("NO_OP", "ALERT"),
+            is_reversible=action in _REVERSIBLE,
         )
         if action in _NONTRIVIAL:
             incident.status = "RECOVERING"

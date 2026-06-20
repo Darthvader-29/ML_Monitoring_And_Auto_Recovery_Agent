@@ -70,3 +70,13 @@ class MetricExposureTests(TestCase):
         # Non-sensitive fields remain.
         self.assertIn("action", row)
         self.assertIn("outcome", row)
+
+    def test_is_reversible_is_meaningful(self):
+        c = Client()
+        for act, expected in [("switch_backup", True), ("alert", False), ("no_op", False)]:
+            ActionLog.objects.all().delete()
+            c.post("/api/actions", data=json.dumps({
+                "action": act, "severity": "HIGH", "target_model": "model_a",
+                "reason": "r", "outcome": "pending"}),
+                content_type="application/json")
+            self.assertEqual(ActionLog.objects.get().is_reversible, expected)
