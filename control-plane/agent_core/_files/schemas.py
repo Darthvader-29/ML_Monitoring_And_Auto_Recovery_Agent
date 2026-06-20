@@ -9,11 +9,18 @@
 # contract). Do not redefine these shapes elsewhere; import them from here.
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now. `datetime.utcnow()` is deprecated (3.12+) and
+    returns a NAIVE datetime, which serializes without an offset and is then
+    ambiguous to the tz-aware Django backend (USE_TZ=True)."""
+    return datetime.now(timezone.utc)
 
 
 # ---- Base ---------------------------------------------------------------
@@ -78,7 +85,7 @@ class MetricSnapshot(_Schema):
     status: HealthStatus = HealthStatus.HEALTHY
     window: str = "5m"
     source: str = "agent"
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
 
 
 class Observation(_Schema):
@@ -93,7 +100,7 @@ class Observation(_Schema):
     metrics: MetricSnapshot
     sample_prediction: Optional[float] = None
     sample_confidence: Optional[float] = None
-    observed_at: datetime = Field(default_factory=datetime.utcnow)
+    observed_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---- 2. DETECT ----------------------------------------------------------
@@ -109,7 +116,7 @@ class DetectionResult(_Schema):
     window: str = "5m"
     score: Optional[float] = None         # drift/anomaly score when applicable
     message: str = ""
-    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    detected_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---- 3. DECIDE ----------------------------------------------------------
@@ -126,7 +133,7 @@ class Decision(_Schema):
     requires_jenkins: bool = False
     jenkins_job: Optional[str] = None     # "switch_active_model" | "rollback_model" | "deploy_model"
     jenkins_params: dict[str, Any] = Field(default_factory=dict)
-    decided_at: datetime = Field(default_factory=datetime.utcnow)
+    decided_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---- 4. ACT -------------------------------------------------------------
@@ -142,7 +149,7 @@ class ActionResult(_Schema):
     jenkins_build_number: Optional[int] = None
     jenkins_build_url: Optional[str] = None
     message: str = ""
-    executed_at: datetime = Field(default_factory=datetime.utcnow)
+    executed_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---- 5. VERIFY ----------------------------------------------------------
@@ -159,4 +166,4 @@ class VerificationResult(_Schema):
     recovered: bool = False
     escalate_to_human: bool = False
     message: str = ""
-    checked_at: datetime = Field(default_factory=datetime.utcnow)
+    checked_at: datetime = Field(default_factory=_utcnow)
