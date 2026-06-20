@@ -10,8 +10,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from registry_app.models import Model, ModelVersion
-
+from api_common import error_response, parse_limit, resolve_version
 from .models import ActionLog, Incident, VerificationResult
 from .serializers import ActionLogSerializer
 
@@ -26,21 +25,6 @@ _OUTCOME_MAP = {"pending": "PENDING", "success": "SUCCESS", "failed": "FAILED",
                 "skipped": "SKIPPED", "reverted": "REVERTED"}
 _NONTRIVIAL = {"SWITCH", "ROLLBACK", "RETRAIN", "DISABLE"}
 
-_DEFAULT_LIMIT, _MAX_LIMIT = 50, 500
-
-
-def _parse_limit(request) -> int:
-    """A safe `?limit`: non-integer/negative falls back to the default, and the
-    value is capped so a caller cannot pull the whole table (or crash the view
-    with a negative slice)."""
-    raw = request.query_params.get("limit", _DEFAULT_LIMIT)
-    try:
-        n = int(raw)
-    except (TypeError, ValueError):
-        return _DEFAULT_LIMIT
-    return min(n, _MAX_LIMIT) if n > 0 else _DEFAULT_LIMIT
-
-
 # Actions the agent can automatically undo: a traffic SWITCH can be switched back,
 # a ROLLBACK re-applied, DISABLE re-enabled. NO_OP/ALERT have nothing to revert and
 # RETRAIN is not cleanly reversible. (The old `action in _NONTRIVIAL or action in
@@ -48,25 +32,12 @@ def _parse_limit(request) -> int:
 _REVERSIBLE = {"SWITCH", "ROLLBACK", "DISABLE"}
 
 
-def _resolve_version(model_name: str) -> ModelVersion:
-    # Normalize so a stray-whitespace typo ("model_a " vs "model_a") resolves to the
-    # SAME registry row instead of materializing a phantom Model/ModelVersion.
-    model_name = str(model_name).strip()
-    model, _ = Model.objects.get_or_create(model_name=model_name)
-    mv = model.versions.order_by("-created_at").first()
-    if mv is None:
-        mv = ModelVersion.objects.create(
-            model=model, version="unknown",
-            artifact_path=f"model-services/{model_name}/model.pkl")
-    return mv
-
-
 class ActionsView(APIView):
     def post(self, request):
         d = request.data or {}
         action = _ACTION_MAP.get(str(d.get("action", "no_op")), "NO_OP")
         target = (str(d.get("target_model") or "").strip()) or "model_a"
-        version = _resolve_version(target)
+        version = resolve_version(target)
         severity = str(d.get("severity", "LOW")).upper()
         incident = Incident.open_or_reuse(version, severity)
 
@@ -86,7 +57,7 @@ class ActionsView(APIView):
         if request.query_params.get("action"):
             qs = qs.filter(action=_ACTION_MAP.get(request.query_params["action"],
                                                   request.query_params["action"]))
-        qs = qs[:_parse_limit(request)]
+        qs = qs[:parse_limit(request)]
         return Response(ActionLogSerializer(qs, many=True).data)
 
 
@@ -95,8 +66,7 @@ class ActionDetailView(APIView):
         try:
             log = ActionLog.objects.select_related("incident").get(pk=pk)
         except ActionLog.DoesNotExist:
-            return Response({"error": {"code": "not_found"}},
-                            status=status.HTTP_404_NOT_FOUND)
+            return error_response("not_found", status_code=status.HTTP_404_NOT_FOUND)
         d = request.data or {}
         if "outcome" in d:
             log.outcome = _OUTCOME_MAP.get(str(d["outcome"]), log.outcome)

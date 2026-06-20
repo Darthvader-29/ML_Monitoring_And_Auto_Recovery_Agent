@@ -61,6 +61,8 @@ class MetricsTracker:
         the actual window is the ring buffer."""
         with self._lock:
             samples = list(self._window)
+            total_requests = self._total_requests
+            total_errors = self._total_errors
 
         request_count = len(samples)
         error_count = sum(1 for s in samples if s.is_error)
@@ -91,4 +93,8 @@ class MetricsTracker:
             "p99_latency_ms": round(_nearest_rank(latencies, 0.99), 3),
             "avg_confidence": round(avg_conf, 6),
             "uptime_seconds": round(self.uptime_seconds, 3),
+            # Cumulative since start (the window above is bounded at WINDOW_SIZE);
+            # previously tracked but never surfaced.
+            "lifetime_requests": total_requests,
+            "lifetime_errors": total_errors,
         }

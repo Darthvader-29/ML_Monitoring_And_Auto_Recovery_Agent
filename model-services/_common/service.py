@@ -17,6 +17,7 @@ Optional fault-injection hooks (read from env per request):
 """
 from __future__ import annotations
 
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -87,6 +88,9 @@ def _extract_features(payload: dict) -> dict:
                 value = float(value)
             except (TypeError, ValueError):
                 raise FeatureError(f"{col} must be numeric") from None
+            # NaN/Inf pass float() but would silently poison the model — reject them.
+            if not math.isfinite(value):
+                raise FeatureError(f"{col} must be a finite number")
         else:
             value = str(value)
         row[col] = value

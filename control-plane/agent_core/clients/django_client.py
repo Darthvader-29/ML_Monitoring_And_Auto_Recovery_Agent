@@ -12,12 +12,12 @@ in Phases 2-3).
 from __future__ import annotations
 
 import logging
-import time
 from typing import Optional, Protocol
 
 import requests
 
 import config
+from retry import poll_until
 from schemas import ActionResult, Decision, MetricSnapshot, Outcome, VerificationResult
 
 log = logging.getLogger("agent.clients.django")
@@ -100,17 +100,17 @@ class DjangoClient:
     def get_active_model(self) -> Optional[str]:
         # Idempotent GET: up to 3 attempts with exponential backoff
         # (0.25s, 0.5s) per api_contracts.md §Timeouts.
-        for attempt in range(3):
+        def _try() -> Optional[str]:
             try:
                 r = requests.get(f"{self._base}/api/active-model",
                                  headers=self._headers, timeout=config.settings.http_timeout())
                 if r.status_code == 200:
                     return r.json().get("model_name")
             except (requests.RequestException, ValueError) as exc:
-                log.warning("get_active_model attempt %d failed: %s", attempt + 1, exc)
-            if attempt < 2:
-                time.sleep(0.25 * (2 ** attempt))
-        return None
+                log.warning("get_active_model failed: %s", exc)
+            return None
+
+        return poll_until(_try, attempts=3, delay=0.25, exponential=True)
 
     def set_active_model(self, model_name: str, reason: str = "") -> None:
         self._post("/api/active-model", {"model_name": model_name, "reason": reason})

@@ -8,6 +8,7 @@ from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from api_common import error_response
 from .models import ActiveModelPointer, ModelVersion
 from .serializers import ModelVersionSerializer
 
@@ -29,9 +30,8 @@ class ActiveModelView(APIView):
         pointer = (ActiveModelPointer.objects
                    .select_related("model_version__model").filter(pk=1).first())
         if pointer is None:
-            return Response({"error": {"code": "not_found",
-                             "message": "no active model configured"}},
-                            status=status.HTTP_404_NOT_FOUND)
+            return error_response("not_found", "no active model configured",
+                                  status.HTTP_404_NOT_FOUND)
         return Response(_active_payload(pointer))
 
     def post(self, request):
@@ -40,9 +40,7 @@ class ActiveModelView(APIView):
         data = request.data or {}
         model_name = data.get("model_name")
         if not model_name:
-            return Response({"error": {"code": "validation_error",
-                             "message": "model_name is required"}},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return error_response("validation_error", "model_name is required")
         reason = data.get("reason", "")
         qs = ModelVersion.objects.filter(model__model_name=model_name)
         if data.get("version"):
@@ -52,9 +50,8 @@ class ActiveModelView(APIView):
             qs = qs.exclude(status__in=["DEPRECATED", "ROLLED_BACK"])
         version = qs.order_by("-created_at").first()
         if version is None:
-            return Response({"error": {"code": "model_not_found",
-                             "message": f"no version for {model_name}"}},
-                            status=status.HTTP_404_NOT_FOUND)
+            return error_response("model_not_found", f"no version for {model_name}",
+                                  status.HTTP_404_NOT_FOUND)
         switched_by = data.get("switched_by", "agent")
         log.info("active-model switch model=%s version=%s by=%s reason=%s",
                  model_name, version.version, switched_by, reason)
