@@ -2,7 +2,7 @@
 import json
 
 from django.db import IntegrityError, transaction
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from .models import ActiveModelPointer, Model, ModelVersion
 
@@ -59,3 +59,28 @@ class RegistryTests(TestCase):
         # The STABLE version is chosen, not the newer DEPRECATED one.
         self.assertEqual(body["version"], stable.version)
         self.assertEqual(body["reason"], "promote stable")
+
+
+class TopologyExposureTests(TestCase):
+    """GET /api/models hides internal topology when the flag is off."""
+
+    def setUp(self):
+        ModelVersion.objects.create(
+            model=Model.objects.create(model_name="model_a"), version="1.0.0",
+            artifact_path="x", endpoint_url="http://model_a:8001", port=8001)
+
+    def test_topology_present_by_default(self):
+        row = Client().get("/api/models").json()[0]
+        self.assertIn("endpoint_url", row)
+        self.assertIn("port", row)
+        self.assertEqual(row["endpoint_url"], "http://model_a:8001")
+        self.assertEqual(row["port"], 8001)
+
+    @override_settings(EXPOSE_INTERNAL_TOPOLOGY=False)
+    def test_topology_hidden_when_flag_off(self):
+        row = Client().get("/api/models").json()[0]
+        self.assertNotIn("endpoint_url", row)
+        self.assertNotIn("port", row)
+        # Non-sensitive fields remain.
+        self.assertIn("model_name", row)
+        self.assertIn("version", row)

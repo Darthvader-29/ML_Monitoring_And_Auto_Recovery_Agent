@@ -1,7 +1,7 @@
 """Tests for the audit trail: POST /api/actions + PATCH verify."""
 import json
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from .models import ActionLog, Incident, VerificationResult
 
@@ -35,3 +35,29 @@ class ActionsTests(TestCase):
         self.assertTrue(v.success)
         self.assertEqual(v.decision, "KEEP")
         self.assertEqual(Incident.objects.get().status, "RESOLVED")
+
+
+class MetricExposureTests(TestCase):
+    """GET /api/actions hides raw operational metric blobs when the flag is off."""
+
+    def _create_action(self):
+        Client().post("/api/actions", data=json.dumps({
+            "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
+            "reason": "x", "outcome": "pending", "detection_signal": "error_rate"}),
+            content_type="application/json")
+
+    def test_metrics_present_by_default(self):
+        self._create_action()
+        row = Client().get("/api/actions").json()[0]
+        self.assertIn("before_metrics", row)
+        self.assertIn("after_metrics", row)
+
+    @override_settings(EXPOSE_INTERNAL_TOPOLOGY=False)
+    def test_metrics_hidden_when_flag_off(self):
+        self._create_action()
+        row = Client().get("/api/actions").json()[0]
+        self.assertNotIn("before_metrics", row)
+        self.assertNotIn("after_metrics", row)
+        # Non-sensitive fields remain.
+        self.assertIn("action", row)
+        self.assertIn("outcome", row)
