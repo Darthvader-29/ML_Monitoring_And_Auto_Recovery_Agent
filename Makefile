@@ -113,9 +113,9 @@ backend-init:
 	cd $(BACKEND_DIR) && venvc/bin/python manage.py migrate --noinput
 	cd $(BACKEND_DIR) && venvc/bin/python manage.py seed_demo
 
-## Run the Django control plane on :8000
+## Run the Django control plane on :8000 (local dev: DEBUG on for friendly errors)
 run-backend:
-	cd $(BACKEND_DIR) && venvc/bin/python manage.py runserver 0.0.0.0:8000
+	cd $(BACKEND_DIR) && DJANGO_DEBUG=1 venvc/bin/python manage.py runserver 0.0.0.0:8000
 
 ## Run the agent loop in the foreground (e.g. make agent ARGS="--ticks 6")
 agent:

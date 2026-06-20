@@ -1,14 +1,16 @@
 """Tests for metrics ingestion (/api/metrics)."""
 import json
+from unittest import skipUnless
 
 from django.test import Client, TestCase
+from _testutil import AUTH_ENABLED, authed_client
 
 from .models import MetricSnapshot
 
 
 class MetricsTests(TestCase):
     def test_post_metrics_creates_snapshot(self):
-        c = Client()
+        c = authed_client()
         resp = c.post("/api/metrics", data=json.dumps({
             "model_name": "model_a", "model_version": "1.0.0", "error_rate": 0.6,
             "avg_latency_ms": 8, "p95_latency_ms": 20, "status": "degraded"}),
@@ -20,7 +22,7 @@ class MetricsTests(TestCase):
         self.assertAlmostEqual(snap.error_rate, 0.6)
 
     def test_get_metrics_lists(self):
-        c = Client()
+        c = authed_client()
         for _ in range(3):
             c.post("/api/metrics", data=json.dumps(
                 {"model_name": "model_a", "model_version": "1.0.0"}),
@@ -28,7 +30,7 @@ class MetricsTests(TestCase):
         self.assertEqual(len(c.get("/api/metrics").json()), 3)
 
     def test_limit_param_is_validated(self):
-        c = Client()
+        c = authed_client()
         for _ in range(3):
             c.post("/api/metrics", data=json.dumps(
                 {"model_name": "model_a", "model_version": "1.0.0"}),
@@ -40,7 +42,7 @@ class MetricsTests(TestCase):
         self.assertEqual(len(c.get("/api/metrics?limit=2").json()), 2)
 
     def test_bad_timestamp_does_not_crash_and_falls_back(self):
-        c = Client()
+        c = authed_client()
         r = c.post("/api/metrics", data=json.dumps({
             "model_name": "model_a", "model_version": "1.0.0",
             "timestamp": "not-a-date"}), content_type="application/json")
@@ -49,7 +51,7 @@ class MetricsTests(TestCase):
 
     def test_valid_iso_timestamp_is_stored_aware(self):
         from django.utils import timezone as tz
-        c = Client()
+        c = authed_client()
         c.post("/api/metrics", data=json.dumps({
             "model_name": "model_a", "model_version": "1.0.0",
             "timestamp": "2026-06-20T10:00:00+00:00"}),
@@ -60,7 +62,7 @@ class MetricsTests(TestCase):
 
     def test_whitespace_typo_does_not_create_phantom_model(self):
         from registry_app.models import Model
-        c = Client()
+        c = authed_client()
         c.post("/api/metrics", data=json.dumps({"model_name": "model_a"}),
                content_type="application/json")
         c.post("/api/metrics", data=json.dumps({"model_name": " model_a "}),
@@ -70,5 +72,15 @@ class MetricsTests(TestCase):
         self.assertEqual(Model.objects.count(), 1)
 
     def test_whitespace_only_name_rejected(self):
-        self.assertEqual(Client().post("/api/metrics", data=json.dumps(
+        self.assertEqual(authed_client().post("/api/metrics", data=json.dumps(
             {"model_name": "   "}), content_type="application/json").status_code, 400)
+
+
+@skipUnless(AUTH_ENABLED, "auth disabled")
+class AuthTests(TestCase):
+    def test_metrics_requires_token(self):
+        body = json.dumps({"model_name": "model_a"})
+        self.assertEqual(Client().post("/api/metrics", data=body,
+                         content_type="application/json").status_code, 401)
+        self.assertEqual(authed_client().post("/api/metrics", data=body,
+                         content_type="application/json").status_code, 201)

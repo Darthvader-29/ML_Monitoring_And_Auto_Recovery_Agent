@@ -1,14 +1,16 @@
 """Tests for the audit trail: POST /api/actions + PATCH verify."""
 import json
+from unittest import skipUnless
 
 from django.test import Client, TestCase, override_settings
+from _testutil import AUTH_ENABLED, authed_client
 
 from .models import ActionLog, Incident, VerificationResult
 
 
 class ActionsTests(TestCase):
     def test_post_action_creates_log_and_incident(self):
-        c = Client()
+        c = authed_client()
         resp = c.post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "error_rate 0.6", "outcome": "pending"}),
@@ -20,7 +22,7 @@ class ActionsTests(TestCase):
         self.assertEqual(log.incident.status, "RECOVERING")
 
     def test_patch_action_records_verification_and_closes_incident(self):
-        c = Client()
+        c = authed_client()
         aid = c.post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "x", "outcome": "pending"}),
@@ -37,7 +39,7 @@ class ActionsTests(TestCase):
         self.assertEqual(Incident.objects.get().status, "RESOLVED")
 
     def test_skipped_outcome_is_not_recorded_as_success(self):
-        c = Client()
+        c = authed_client()
         resp = c.post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "target already active", "outcome": "skipped"}),
@@ -50,21 +52,21 @@ class MetricExposureTests(TestCase):
     """GET /api/actions hides raw operational metric blobs when the flag is off."""
 
     def _create_action(self):
-        Client().post("/api/actions", data=json.dumps({
+        authed_client().post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "x", "outcome": "pending", "detection_signal": "error_rate"}),
             content_type="application/json")
 
     def test_metrics_present_by_default(self):
         self._create_action()
-        row = Client().get("/api/actions").json()[0]
+        row = authed_client().get("/api/actions").json()[0]
         self.assertIn("before_metrics", row)
         self.assertIn("after_metrics", row)
 
     @override_settings(EXPOSE_INTERNAL_TOPOLOGY=False)
     def test_metrics_hidden_when_flag_off(self):
         self._create_action()
-        row = Client().get("/api/actions").json()[0]
+        row = authed_client().get("/api/actions").json()[0]
         self.assertNotIn("before_metrics", row)
         self.assertNotIn("after_metrics", row)
         # Non-sensitive fields remain.
@@ -72,7 +74,7 @@ class MetricExposureTests(TestCase):
         self.assertIn("outcome", row)
 
     def test_is_reversible_is_meaningful(self):
-        c = Client()
+        c = authed_client()
         for act, expected in [("switch_backup", True), ("alert", False), ("no_op", False)]:
             ActionLog.objects.all().delete()
             c.post("/api/actions", data=json.dumps({
@@ -82,7 +84,7 @@ class MetricExposureTests(TestCase):
             self.assertEqual(ActionLog.objects.get().is_reversible, expected)
 
     def test_executed_at_set_once_and_not_moved_on_repatch(self):
-        c = Client()
+        c = authed_client()
         aid = c.post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "x", "outcome": "pending"}),
@@ -99,7 +101,7 @@ class MetricExposureTests(TestCase):
         self.assertEqual(ActionLog.objects.get(pk=aid).executed_at, first)
 
     def test_revert_verdict_keeps_incident_open(self):
-        c = Client()
+        c = authed_client()
         aid = c.post("/api/actions", data=json.dumps({
             "action": "switch_backup", "severity": "HIGH", "target_model": "model_a",
             "reason": "x", "outcome": "pending"}),
@@ -114,3 +116,10 @@ class MetricExposureTests(TestCase):
         inc = Incident.objects.get()
         self.assertEqual(inc.status, "RECOVERING")   # NOT escalated/closed
         self.assertIsNone(inc.closed_at)
+
+
+@skipUnless(AUTH_ENABLED, "auth disabled")
+class ActionsAuthTests(TestCase):
+    def test_actions_requires_token(self):
+        self.assertEqual(Client().get("/api/actions").status_code, 401)
+        self.assertEqual(authed_client().get("/api/actions").status_code, 200)
